@@ -19,5 +19,6 @@ if(SDL2_IMAGE_FOUND)
 endif()
 
 if(SDL2_TTF_FOUND)
+    target_include_directories(gui PRIVATE ${SDL2_TTF_INCLUDE_DIRS})
     target_link_libraries(gui PRIVATE ${SDL2_TTF_LIBRARIES})
 endif()
