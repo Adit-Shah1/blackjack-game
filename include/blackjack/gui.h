@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <string>
 #include <memory>
 #include <vector>
@@ -13,9 +14,17 @@ struct SDL_Window;
 struct SDL_Renderer;
 union SDL_Event;
 struct TTF_Font;
+struct SDL_Texture;
 
 namespace blackjack {
 
+// Forward declarations
+class AudioManager;
+class Application;
+
+// ---------------------------------------------------------------------------
+// AppState
+// ---------------------------------------------------------------------------
 enum class AppState {
     MainMenu,
     Lobby,
@@ -28,24 +37,229 @@ enum class AppState {
     Exiting
 };
 
-// Forward declaration
-class Application;
-
 // ---------------------------------------------------------------------------
-// Simple clickable button widget
+// Geometry
 // ---------------------------------------------------------------------------
-struct Button {
+struct Rect {
     int x = 0;
     int y = 0;
     int w = 0;
     int h = 0;
+
+    bool contains(int mx, int my) const {
+        return mx >= x && mx < x + w && my >= y && my < y + h;
+    }
+};
+
+// ---------------------------------------------------------------------------
+// Color
+// ---------------------------------------------------------------------------
+struct Color {
+    uint8_t r = 255;
+    uint8_t g = 255;
+    uint8_t b = 255;
+    uint8_t a = 255;
+};
+
+// ---------------------------------------------------------------------------
+// Theme
+// ---------------------------------------------------------------------------
+struct Theme {
+    Color tableFelt{45, 90, 39, 255};
+    Color cardFace{255, 255, 255, 255};
+    Color cardBack{26, 58, 110, 255};
+    Color redSuit{212, 0, 0, 255};
+    Color blackSuit{26, 26, 26, 255};
+    Color goldAccent{255, 215, 0, 255};
+    Color panelBg{0, 0, 0, 170};
+    Color buttonNormal{60, 60, 60, 255};
+    Color buttonHover{80, 80, 80, 255};
+    Color buttonPressed{40, 40, 40, 255};
+    Color textPrimary{255, 255, 255, 255};
+    Color textSecondary{180, 180, 180, 255};
+    Color chipWhite{255, 255, 255, 255};
+    Color chipRed{212, 0, 0, 255};
+    Color chipBlue{0, 102, 204, 255};
+    Color chipGreen{0, 170, 68, 255};
+    Color chipBlack{26, 26, 26, 255};
+};
+
+// ---------------------------------------------------------------------------
+// TextureManager
+// ---------------------------------------------------------------------------
+class TextureManager {
+public:
+    ~TextureManager();
+
+    SDL_Texture* load(SDL_Renderer* renderer, const std::string& key,
+                      const std::string& filepath);
+    SDL_Texture* get(const std::string& key);
+    void clear();
+
+private:
+    std::unordered_map<std::string, SDL_Texture*> m_textures;
+};
+
+// ---------------------------------------------------------------------------
+// FontManager
+// ---------------------------------------------------------------------------
+class FontManager {
+public:
+    ~FontManager();
+
+    TTF_Font* load(const std::string& key, const std::string& filepath, int size);
+    TTF_Font* get(const std::string& key);
+    void registerFont(const std::string& key, TTF_Font* font);
+    void clear();
+
+private:
+    std::unordered_map<std::string, TTF_Font*> m_fonts;
+};
+
+// ---------------------------------------------------------------------------
+// Widget base class
+// ---------------------------------------------------------------------------
+class Widget {
+public:
+    virtual ~Widget() = default;
+    virtual void render(SDL_Renderer* renderer) = 0;
+    virtual bool handleEvent(const SDL_Event& event) = 0;
+
+    bool contains(int mx, int my) const {
+        return bounds.contains(mx, my);
+    }
+
+    Rect bounds;
+    bool visible = true;
+    bool enabled = true;
+    const Theme* theme = nullptr;
+};
+
+// ---------------------------------------------------------------------------
+// Button
+// ---------------------------------------------------------------------------
+class Button : public Widget {
+public:
+    Button(int x, int y, int w, int h, const std::string& label,
+           std::function<void()> onClick, TTF_Font* font);
+
+    void render(SDL_Renderer* renderer) override;
+    bool handleEvent(const SDL_Event& event) override;
+
     std::string label;
     std::function<void()> onClick;
-    bool hovered = false;
 
-    bool contains(int mx, int my) const;
-    void render(SDL_Renderer* renderer, TTF_Font* font);
-    bool handleEvent(const SDL_Event& event);
+    void setFont(TTF_Font* font);
+    void resetState();
+
+private:
+    TTF_Font* m_font = nullptr;
+    bool m_hovered = false;
+    bool m_pressed = false;
+};
+
+// ---------------------------------------------------------------------------
+// Label
+// ---------------------------------------------------------------------------
+class Label : public Widget {
+public:
+    Label(int x, int y, const std::string& text, TTF_Font* font);
+
+    void render(SDL_Renderer* renderer) override;
+    bool handleEvent(const SDL_Event& event) override;
+
+    std::string text;
+    Color color;
+
+    void setFont(TTF_Font* font);
+
+private:
+    TTF_Font* m_font = nullptr;
+};
+
+// ---------------------------------------------------------------------------
+// Panel
+// ---------------------------------------------------------------------------
+class Panel : public Widget {
+public:
+    Panel(int x, int y, int w, int h);
+
+    void render(SDL_Renderer* renderer) override;
+    bool handleEvent(const SDL_Event& event) override;
+
+    Color backgroundColor;
+    std::vector<std::unique_ptr<Widget>> children;
+
+    void addWidget(std::unique_ptr<Widget> widget);
+};
+
+// ---------------------------------------------------------------------------
+// Slider
+// ---------------------------------------------------------------------------
+class Slider : public Widget {
+public:
+    Slider(int x, int y, int w, int h, int minVal, int maxVal, int initialVal);
+
+    void render(SDL_Renderer* renderer) override;
+    bool handleEvent(const SDL_Event& event) override;
+
+    int minValue = 0;
+    int maxValue = 100;
+    int value = 50;
+    std::function<void(int)> onValueChanged;
+
+private:
+    bool m_dragging = false;
+    int m_minVal = 0;
+    int m_maxVal = 100;
+
+    void updateValueFromMouse(int mx);
+};
+
+// ---------------------------------------------------------------------------
+// Modal
+// ---------------------------------------------------------------------------
+class Modal : public Widget {
+public:
+    Modal(int x, int y, int w, int h,
+          const std::string& title, const std::string& message,
+          TTF_Font* font);
+
+    void render(SDL_Renderer* renderer) override;
+    bool handleEvent(const SDL_Event& event) override;
+
+    std::string title;
+    std::string message;
+    std::vector<std::string> buttonLabels;
+    std::function<void(int)> onResult; // index of clicked button
+
+    void rebuildButtons();
+
+private:
+    TTF_Font* m_font = nullptr;
+    std::vector<std::unique_ptr<Button>> m_buttons;
+};
+
+// ---------------------------------------------------------------------------
+// Toast
+// ---------------------------------------------------------------------------
+class Toast : public Widget {
+public:
+    Toast(int x, int y, const std::string& message, TTF_Font* font,
+          float duration = 2.0f);
+
+    void render(SDL_Renderer* renderer) override;
+    bool handleEvent(const SDL_Event& event) override;
+
+    void update(float deltaTime);
+    bool isExpired() const;
+
+    std::string message;
+    float duration = 2.0f;
+    float elapsed = 0.0f;
+
+private:
+    TTF_Font* m_font = nullptr;
 };
 
 // ---------------------------------------------------------------------------
@@ -104,6 +318,11 @@ public:
     ScreenManager& screenManager() { return m_screenManager; }
     TTF_Font* font() { return m_font; }
 
+    TextureManager& textureManager() { return m_textureManager; }
+    FontManager& fontManager() { return m_fontManager; }
+    AudioManager& audioManager() { return *m_audioManager; }
+    const Theme& theme() const { return m_theme; }
+
     // Render text centered at (x, y). If font is missing, this is a no-op.
     void renderText(const std::string& text, int x, int y,
                     unsigned char r = 255, unsigned char g = 255, unsigned char b = 255);
@@ -118,6 +337,11 @@ private:
     SDL_Renderer* m_renderer = nullptr;
     TTF_Font* m_font = nullptr;
 
+    TextureManager m_textureManager;
+    FontManager m_fontManager;
+    std::unique_ptr<AudioManager> m_audioManager;
+    Theme m_theme;
+
     ScreenManager m_screenManager;
 
     bool loadFont();
@@ -128,7 +352,7 @@ private:
 };
 
 // ---------------------------------------------------------------------------
-// Stub Screens
+// Concrete Screens
 // ---------------------------------------------------------------------------
 
 class MainMenuScreen : public Screen {
@@ -142,7 +366,7 @@ public:
 
 private:
     Application* m_app;
-    std::vector<Button> m_buttons;
+    std::vector<std::unique_ptr<Button>> m_buttons;
 
     void setupButtons();
 };
@@ -157,7 +381,7 @@ public:
 
 private:
     Application* m_app;
-    std::vector<Button> m_buttons;
+    std::vector<std::unique_ptr<Button>> m_buttons;
 };
 
 class SettingsScreen : public Screen {
@@ -170,7 +394,7 @@ public:
 
 private:
     Application* m_app;
-    std::vector<Button> m_buttons;
+    std::vector<std::unique_ptr<Button>> m_buttons;
 };
 
 class GameTableScreen : public Screen {
@@ -188,7 +412,7 @@ private:
     std::unique_ptr<RoundState> m_round;
     RoundPhase m_lastPhase = RoundPhase::RoundComplete;
     int m_currentBet = 100;
-    std::vector<Button> m_buttons;
+    std::vector<std::unique_ptr<Button>> m_buttons;
     float m_autoAdvanceTimer = 0.0f;
     bool m_needsUIRebuild = false;
     std::string m_message;
@@ -226,7 +450,7 @@ public:
 
 private:
     Application* m_app;
-    std::vector<Button> m_buttons;
+    std::vector<std::unique_ptr<Button>> m_buttons;
 };
 
 class AchievementsScreen : public Screen {
@@ -239,7 +463,7 @@ public:
 
 private:
     Application* m_app;
-    std::vector<Button> m_buttons;
+    std::vector<std::unique_ptr<Button>> m_buttons;
 };
 
 }  // namespace blackjack

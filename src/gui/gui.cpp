@@ -1,61 +1,568 @@
-// GUI layer — Application shell, ScreenManager, and stub screens
+// GUI layer — Application shell, ScreenManager, managers, widget toolkit, and screens
 #include <blackjack/gui.h>
+#include <blackjack/audio.h>
 
 #include <SDL.h>
 #include <SDL_ttf.h>
-#include <iostream>
+#include <SDL_image.h>
 #include <algorithm>
+#include <iostream>
 
 namespace blackjack {
+
+// ============================================================================
+// Helpers
+// ============================================================================
+
+static SDL_Color toSDL(const Color& c) {
+    SDL_Color sc = {};
+    sc.r = c.r;
+    sc.g = c.g;
+    sc.b = c.b;
+    sc.a = c.a;
+    return sc;
+}
+
+static void fillRect(SDL_Renderer* r, int x, int y, int w, int h, const Color& c) {
+    SDL_SetRenderDrawColor(r, c.r, c.g, c.b, c.a);
+    SDL_Rect rect{x, y, w, h};
+    SDL_RenderFillRect(r, &rect);
+}
+
+static void drawRect(SDL_Renderer* r, int x, int y, int w, int h, const Color& c) {
+    SDL_SetRenderDrawColor(r, c.r, c.g, c.b, c.a);
+    SDL_Rect rect{x, y, w, h};
+    SDL_RenderDrawRect(r, &rect);
+}
+
+static void drawText(SDL_Renderer* renderer, TTF_Font* font,
+                     const std::string& text, int x, int y,
+                     unsigned char r, unsigned char g, unsigned char b) {
+    if (!font || text.empty()) return;
+    SDL_Color color{r, g, b, 255};
+    SDL_Surface* surface = TTF_RenderText_Blended(font, text.c_str(), color);
+    if (!surface) return;
+    SDL_Texture* texture = SDL_CreateTextureFromSurface(renderer, surface);
+    if (texture) {
+        SDL_Rect dst{x, y, surface->w, surface->h};
+        SDL_RenderCopy(renderer, texture, nullptr, &dst);
+        SDL_DestroyTexture(texture);
+    }
+    SDL_FreeSurface(surface);
+}
+
+static void drawTextCentered(SDL_Renderer* renderer, TTF_Font* font,
+                             const std::string& text, int cx, int cy,
+                             unsigned char r, unsigned char g, unsigned char b) {
+    if (!font || text.empty()) return;
+    SDL_Color color{r, g, b, 255};
+    SDL_Surface* surface = TTF_RenderText_Blended(font, text.c_str(), color);
+    if (!surface) return;
+    SDL_Texture* texture = SDL_CreateTextureFromSurface(renderer, surface);
+    if (texture) {
+        int x = cx - surface->w / 2;
+        int y = cy - surface->h / 2;
+        SDL_Rect dst{x, y, surface->w, surface->h};
+        SDL_RenderCopy(renderer, texture, nullptr, &dst);
+        SDL_DestroyTexture(texture);
+    }
+    SDL_FreeSurface(surface);
+}
+
+static void drawScreenLabel(SDL_Renderer* renderer, TTF_Font* font,
+                            const std::string& title) {
+    drawTextCentered(renderer, font, title, 640, 80, 255, 255, 255);
+}
+
+static void drawEscHint(SDL_Renderer* renderer, TTF_Font* font) {
+    drawTextCentered(renderer, font, "Press ESC for Main Menu", 640, 660, 180, 180, 180);
+}
+
+static std::string rankDisplay(const Card& card) {
+    char c = card.rankChar();
+    if (c == 'T') return "10";
+    return std::string(1, c);
+}
+
+static bool isRedSuit(const Card& card) {
+    return card.suit() == Suit::Hearts || card.suit() == Suit::Diamonds;
+}
+
+static bool handleEscToMenu(const SDL_Event& event, Application* app) {
+    if (event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_ESCAPE) {
+        app->screenManager().transitionTo(AppState::MainMenu);
+        return true;
+    }
+    return false;
+}
+
+static void renderButtons(SDL_Renderer* renderer,
+                          std::vector<std::unique_ptr<Button>>& buttons) {
+    for (auto& btn : buttons) {
+        if (btn->visible) btn->render(renderer);
+    }
+}
+
+static bool routeButtons(const SDL_Event& event,
+                         std::vector<std::unique_ptr<Button>>& buttons) {
+    for (auto& btn : buttons) {
+        if (btn->handleEvent(event)) return true;
+    }
+    return false;
+}
+
+// ============================================================================
+// TextureManager
+// ============================================================================
+
+TextureManager::~TextureManager() {
+    clear();
+}
+
+SDL_Texture* TextureManager::load(SDL_Renderer* renderer,
+                                  const std::string& key,
+                                  const std::string& filepath) {
+    auto it = m_textures.find(key);
+    if (it != m_textures.end()) return it->second;
+
+    SDL_Texture* texture = IMG_LoadTexture(renderer, filepath.c_str());
+    if (!texture) {
+        SDL_Surface* surface = SDL_LoadBMP(filepath.c_str());
+        if (surface) {
+            texture = SDL_CreateTextureFromSurface(renderer, surface);
+            SDL_FreeSurface(surface);
+        }
+    }
+    if (texture) {
+        m_textures[key] = texture;
+    }
+    return texture;
+}
+
+SDL_Texture* TextureManager::get(const std::string& key) {
+    auto it = m_textures.find(key);
+    if (it != m_textures.end()) return it->second;
+    return nullptr;
+}
+
+void TextureManager::clear() {
+    for (auto& [k, texture] : m_textures) {
+        (void)k;
+        if (texture) SDL_DestroyTexture(texture);
+    }
+    m_textures.clear();
+}
+
+// ============================================================================
+// FontManager
+// ============================================================================
+
+FontManager::~FontManager() {
+    clear();
+}
+
+TTF_Font* FontManager::load(const std::string& key,
+                            const std::string& filepath,
+                            int size) {
+    auto it = m_fonts.find(key);
+    if (it != m_fonts.end() && it->second != nullptr) {
+        return it->second;
+    }
+    TTF_Font* font = TTF_OpenFont(filepath.c_str(), size);
+    if (font) {
+        m_fonts[key] = font;
+    }
+    return font;
+}
+
+TTF_Font* FontManager::get(const std::string& key) {
+    auto it = m_fonts.find(key);
+    if (it != m_fonts.end()) return it->second;
+    return nullptr;
+}
+
+void FontManager::registerFont(const std::string& key, TTF_Font* font) {
+    m_fonts[key] = font;
+}
+
+void FontManager::clear() {
+    for (auto& [k, font] : m_fonts) {
+        (void)k;
+        if (font) TTF_CloseFont(font);
+    }
+    m_fonts.clear();
+}
 
 // ============================================================================
 // Button
 // ============================================================================
 
-bool Button::contains(int mx, int my) const {
-    return mx >= x && mx < x + w && my >= y && my < y + h;
+Button::Button(int x, int y, int w, int h, const std::string& label,
+               std::function<void()> onClick, TTF_Font* font)
+    : label(label), onClick(std::move(onClick)), m_font(font) {
+    bounds = {x, y, w, h};
 }
 
-void Button::render(SDL_Renderer* renderer, TTF_Font* font) {
-    // Background
-    if (hovered) {
-        SDL_SetRenderDrawColor(renderer, 80, 80, 80, 255);
-    } else {
-        SDL_SetRenderDrawColor(renderer, 60, 60, 60, 255);
+void Button::setFont(TTF_Font* font) {
+    m_font = font;
+}
+
+void Button::resetState() {
+    m_hovered = false;
+    m_pressed = false;
+}
+
+void Button::render(SDL_Renderer* renderer) {
+    if (!visible) return;
+
+    float scale = 1.0f;
+    if (m_pressed && enabled) {
+        scale = 0.95f;
+    } else if (m_hovered && enabled) {
+        scale = 1.05f;
     }
-    SDL_Rect rect{ x, y, w, h };
+
+    int w = static_cast<int>(bounds.w * scale);
+    int h = static_cast<int>(bounds.h * scale);
+    int x = bounds.x + (bounds.w - w) / 2;
+    int y = bounds.y + (bounds.h - h) / 2;
+
+    const Theme t = theme ? *theme : Theme{};
+
+    Color bg = !enabled ? Color{40, 40, 40, 200} :
+               (m_pressed && enabled ? t.buttonPressed :
+                (m_hovered && enabled ? t.buttonHover : t.buttonNormal));
+
+    SDL_Color sdlBg = toSDL(bg);
+    SDL_SetRenderDrawColor(renderer, sdlBg.r, sdlBg.g, sdlBg.b, sdlBg.a);
+    SDL_Rect rect{x, y, w, h};
     SDL_RenderFillRect(renderer, &rect);
 
     // Border
-    SDL_SetRenderDrawColor(renderer, 200, 200, 200, 255);
-    SDL_RenderDrawRect(renderer, &rect);
+    if (m_hovered && enabled) {
+        SDL_Color sdlGold = toSDL(t.goldAccent);
+        SDL_SetRenderDrawColor(renderer, sdlGold.r, sdlGold.g, sdlGold.b, 180);
+        SDL_RenderDrawRect(renderer, &rect);
+    } else {
+        SDL_Color sdlBorder = toSDL(t.textSecondary);
+        SDL_SetRenderDrawColor(renderer, sdlBorder.r, sdlBorder.g, sdlBorder.b, sdlBorder.a);
+        SDL_RenderDrawRect(renderer, &rect);
+    }
 
-    // Label (centered)
-    if (font && !label.empty()) {
-        SDL_Color color{ 255, 255, 255, 255 };
-        SDL_Surface* surface = TTF_RenderText_Blended(font, label.c_str(), color);
+    // Label
+    if (m_font && !label.empty()) {
+        Color textColor = !enabled ? t.textSecondary : t.textPrimary;
+        SDL_Color sdlText = toSDL(textColor);
+        SDL_Surface* surface = TTF_RenderText_Blended(m_font, label.c_str(), sdlText);
         if (surface) {
             SDL_Texture* texture = SDL_CreateTextureFromSurface(renderer, surface);
-            int tw = surface->w;
-            int th = surface->h;
-            SDL_Rect dst{ x + (w - tw) / 2, y + (h - th) / 2, tw, th };
-            SDL_RenderCopy(renderer, texture, nullptr, &dst);
-            SDL_DestroyTexture(texture);
+            if (texture) {
+                int tw = surface->w;
+                int th = surface->h;
+                SDL_Rect dst{ x + (w - tw) / 2, y + (h - th) / 2, tw, th };
+                SDL_RenderCopy(renderer, texture, nullptr, &dst);
+                SDL_DestroyTexture(texture);
+            }
             SDL_FreeSurface(surface);
         }
     }
 }
 
 bool Button::handleEvent(const SDL_Event& event) {
+    if (!enabled || !visible) return false;
+
     if (event.type == SDL_MOUSEMOTION) {
-        hovered = contains(event.motion.x, event.motion.y);
+        bool inside = contains(event.motion.x, event.motion.y);
+        if (inside != m_hovered) {
+            m_hovered = inside;
+        }
     }
     if (event.type == SDL_MOUSEBUTTONDOWN && event.button.button == SDL_BUTTON_LEFT) {
-        if (contains(event.button.x, event.button.y) && onClick) {
-            onClick();
+        if (contains(event.button.x, event.button.y)) {
+            m_pressed = true;
             return true;
         }
     }
+    if (event.type == SDL_MOUSEBUTTONUP && event.button.button == SDL_BUTTON_LEFT) {
+        if (m_pressed) {
+            m_pressed = false;
+            if (contains(event.button.x, event.button.y) && onClick) {
+                onClick();
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+// ============================================================================
+// Label
+// ============================================================================
+
+Label::Label(int x, int y, const std::string& text, TTF_Font* font)
+    : text(text), m_font(font) {
+    bounds = {x, y, 0, 0};
+    color = {255, 255, 255, 255};
+}
+
+void Label::setFont(TTF_Font* font) {
+    m_font = font;
+}
+
+void Label::render(SDL_Renderer* renderer) {
+    if (!visible || text.empty() || !m_font) return;
+
+    Color c = color;
+    SDL_Color sdlColor = toSDL(c);
+    SDL_Surface* surface = TTF_RenderText_Blended(m_font, text.c_str(), sdlColor);
+    if (surface) {
+        bounds.w = surface->w;
+        bounds.h = surface->h;
+        SDL_Texture* texture = SDL_CreateTextureFromSurface(renderer, surface);
+        if (texture) {
+            SDL_Rect dst{bounds.x, bounds.y, bounds.w, bounds.h};
+            SDL_RenderCopy(renderer, texture, nullptr, &dst);
+            SDL_DestroyTexture(texture);
+        }
+        SDL_FreeSurface(surface);
+    }
+}
+
+bool Label::handleEvent(const SDL_Event& /*event*/) {
+    return false;
+}
+
+// ============================================================================
+// Panel
+// ============================================================================
+
+Panel::Panel(int x, int y, int w, int h) {
+    bounds = {x, y, w, h};
+    backgroundColor = {0, 0, 0, 170};
+}
+
+void Panel::addWidget(std::unique_ptr<Widget> widget) {
+    children.push_back(std::move(widget));
+}
+
+void Panel::render(SDL_Renderer* renderer) {
+    if (!visible) return;
+
+    if (backgroundColor.a > 0) {
+        fillRect(renderer, bounds.x, bounds.y, bounds.w, bounds.h, backgroundColor);
+    }
+
+    for (auto& child : children) {
+        if (child->visible) child->render(renderer);
+    }
+}
+
+bool Panel::handleEvent(const SDL_Event& event) {
+    if (!enabled || !visible) return false;
+    for (auto it = children.rbegin(); it != children.rend(); ++it) {
+        if ((*it)->handleEvent(event)) return true;
+    }
+    return false;
+}
+
+// ============================================================================
+// Slider
+// ============================================================================
+
+Slider::Slider(int x, int y, int w, int h, int minVal, int maxVal, int initialVal)
+    : m_minVal(minVal), m_maxVal(maxVal) {
+    bounds = {x, y, w, h};
+    minValue = minVal;
+    maxValue = maxVal;
+    value = initialVal;
+}
+
+void Slider::updateValueFromMouse(int mx) {
+    int trackX = mx - bounds.x;
+    float t = static_cast<float>(trackX) / bounds.w;
+    t = std::max(0.0f, std::min(1.0f, t));
+    int newValue = m_minVal + static_cast<int>(t * (m_maxVal - m_minVal));
+    if (newValue != value) {
+        value = newValue;
+        if (onValueChanged) onValueChanged(value);
+    }
+}
+
+void Slider::render(SDL_Renderer* renderer) {
+    if (!visible) return;
+
+    // Track
+    int trackY = bounds.y + bounds.h / 2 - 2;
+    SDL_SetRenderDrawColor(renderer, 80, 80, 80, 255);
+    SDL_Rect track{bounds.x, trackY, bounds.w, 4};
+    SDL_RenderFillRect(renderer, &track);
+
+    // Handle
+    float t = static_cast<float>(value - m_minVal) / (m_maxVal - m_minVal);
+    int handleX = bounds.x + static_cast<int>(t * (bounds.w - 20));
+    int handleY = bounds.y + (bounds.h - 20) / 2;
+    SDL_SetRenderDrawColor(renderer, 200, 200, 200, 255);
+    SDL_Rect handle{handleX, handleY, 20, 20};
+    SDL_RenderFillRect(renderer, &handle);
+    SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
+    SDL_RenderDrawRect(renderer, &handle);
+}
+
+bool Slider::handleEvent(const SDL_Event& event) {
+    if (!enabled || !visible) return false;
+
+    if (event.type == SDL_MOUSEBUTTONDOWN && event.button.button == SDL_BUTTON_LEFT) {
+        if (contains(event.button.x, event.button.y)) {
+            m_dragging = true;
+            updateValueFromMouse(event.button.x);
+            return true;
+        }
+    }
+    if (event.type == SDL_MOUSEMOTION && m_dragging) {
+        updateValueFromMouse(event.motion.x);
+        return true;
+    }
+    if (event.type == SDL_MOUSEBUTTONUP && event.button.button == SDL_BUTTON_LEFT) {
+        if (m_dragging) {
+            m_dragging = false;
+            return true;
+        }
+    }
+    return false;
+}
+
+// ============================================================================
+// Modal
+// ============================================================================
+
+Modal::Modal(int x, int y, int w, int h,
+             const std::string& title, const std::string& message,
+             TTF_Font* font)
+    : title(title), message(message), m_font(font) {
+    bounds = {x, y, w, h};
+}
+
+void Modal::rebuildButtons() {
+    m_buttons.clear();
+    if (buttonLabels.empty()) {
+        buttonLabels.push_back("OK");
+    }
+
+    int btnW = 100;
+    int btnH = 40;
+    int gap = 10;
+    int totalW = static_cast<int>(buttonLabels.size()) * btnW +
+                 (static_cast<int>(buttonLabels.size()) - 1) * gap;
+    int startX = bounds.x + (bounds.w - totalW) / 2;
+    int y = bounds.y + bounds.h - btnH - 20;
+
+    for (size_t i = 0; i < buttonLabels.size(); ++i) {
+        auto btn = std::make_unique<Button>(
+            startX + static_cast<int>(i) * (btnW + gap), y, btnW, btnH,
+            buttonLabels[i],
+            [this, i]() { if (onResult) onResult(static_cast<int>(i)); },
+            m_font);
+        if (theme) btn->theme = theme;
+        m_buttons.push_back(std::move(btn));
+    }
+}
+
+void Modal::render(SDL_Renderer* renderer) {
+    if (!visible) return;
+
+    // Semi-transparent overlay
+    fillRect(renderer, 0, 0, 1280, 720, {0, 0, 0, 170});
+
+    // Modal panel
+    fillRect(renderer, bounds.x, bounds.y, bounds.w, bounds.h, {40, 40, 45, 255});
+    drawRect(renderer, bounds.x, bounds.y, bounds.w, bounds.h, {200, 200, 200, 255});
+
+    // Title
+    drawTextCentered(renderer, m_font, title, bounds.x + bounds.w / 2,
+                       bounds.y + 30, 255, 255, 255);
+
+    // Message
+    drawTextCentered(renderer, m_font, message, bounds.x + bounds.w / 2,
+                       bounds.y + 70, 200, 200, 200);
+
+    // Buttons
+    if (m_buttons.empty() && !buttonLabels.empty()) {
+        rebuildButtons();
+    }
+    for (auto& btn : m_buttons) {
+        if (btn->visible) btn->render(renderer);
+    }
+}
+
+bool Modal::handleEvent(const SDL_Event& event) {
+    if (!enabled || !visible) return false;
+    for (auto& btn : m_buttons) {
+        if (btn->handleEvent(event)) return true;
+    }
+    return false;
+}
+
+// ============================================================================
+// Toast
+// ============================================================================
+
+Toast::Toast(int x, int y, const std::string& message, TTF_Font* font,
+             float duration)
+    : message(message), duration(duration), m_font(font) {
+    bounds = {x, y, 300, 50};
+}
+
+void Toast::update(float deltaTime) {
+    elapsed += deltaTime;
+}
+
+bool Toast::isExpired() const {
+    return elapsed >= duration;
+}
+
+void Toast::render(SDL_Renderer* renderer) {
+    if (!visible || isExpired()) return;
+
+    float t = elapsed / duration;
+    uint8_t alpha = static_cast<uint8_t>((1.0f - t) * 255);
+
+    // Compute dynamic size from text
+    if (m_font && !message.empty()) {
+        int tw = 0, th = 0;
+        TTF_SizeText(m_font, message.c_str(), &tw, &th);
+        bounds.w = tw + 40;
+        bounds.h = th + 20;
+    }
+
+    // Background
+    fillRect(renderer, bounds.x, bounds.y, bounds.w, bounds.h,
+             {40, 40, 40, alpha});
+
+    // Border
+    drawRect(renderer, bounds.x, bounds.y, bounds.w, bounds.h,
+             {255, 215, 0, alpha});
+
+    // Text
+    if (m_font && !message.empty()) {
+        SDL_Color color{255, 255, 255, alpha};
+        SDL_Surface* surface = TTF_RenderText_Blended(m_font, message.c_str(), color);
+        if (surface) {
+            SDL_Texture* texture = SDL_CreateTextureFromSurface(renderer, surface);
+            if (texture) {
+                SDL_Rect dst{
+                    bounds.x + (bounds.w - surface->w) / 2,
+                    bounds.y + (bounds.h - surface->h) / 2,
+                    surface->w, surface->h
+                };
+                SDL_RenderCopy(renderer, texture, nullptr, &dst);
+                SDL_DestroyTexture(texture);
+            }
+            SDL_FreeSurface(surface);
+        }
+    }
+}
+
+bool Toast::handleEvent(const SDL_Event& /*event*/) {
     return false;
 }
 
@@ -108,7 +615,10 @@ Application::Application(const std::string& title, int width, int height)
     : m_title(title), m_width(width), m_height(height) {}
 
 Application::~Application() {
-    if (m_font) TTF_CloseFont(m_font);
+    m_textureManager.clear();
+    m_fontManager.clear();
+    m_font = nullptr;
+    m_audioManager.reset();
     if (m_renderer) SDL_DestroyRenderer(m_renderer);
     if (m_window) SDL_DestroyWindow(m_window);
     TTF_Quit();
@@ -153,6 +663,12 @@ bool Application::init() {
     }
 
     SDL_RenderSetLogicalSize(m_renderer, 1280, 720);
+    SDL_SetRenderDrawBlendMode(m_renderer, SDL_BLENDMODE_BLEND);
+
+    m_audioManager = std::make_unique<AudioManager>();
+    if (!m_audioManager->init()) {
+        std::cerr << "Warning: Audio initialization failed." << std::endl;
+    }
 
     if (!loadFont()) {
         std::cerr << "Warning: failed to load any font; text will not render." << std::endl;
@@ -162,25 +678,25 @@ bool Application::init() {
 }
 
 bool Application::loadFont() {
-    // Try common system font paths on macOS, Linux, and Windows
     static const std::vector<std::string> fontPaths = {
-        // macOS
         "/System/Library/Fonts/Helvetica.ttc",
         "/System/Library/Fonts/Supplemental/Arial.ttf",
         "/Library/Fonts/Arial.ttf",
         "/System/Library/Fonts/Monaco.ttf",
-        // Linux
         "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
         "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
         "/usr/share/fonts/truetype/freefont/FreeSans.ttf",
-        // Windows
         "C:\\Windows\\Fonts\\arial.ttf",
         "C:\\Windows\\Fonts\\segoeui.ttf",
     };
 
     for (const auto& path : fontPaths) {
-        m_font = TTF_OpenFont(path.c_str(), 24);
-        if (m_font) return true;
+        TTF_Font* font = TTF_OpenFont(path.c_str(), 24);
+        if (font) {
+            m_font = font;
+            m_fontManager.registerFont("default", font);
+            return true;
+        }
     }
 
     return false;
@@ -190,7 +706,7 @@ void Application::renderText(const std::string& text, int x, int y,
                              unsigned char r, unsigned char g, unsigned char b) {
     if (!m_font || text.empty()) return;
 
-    SDL_Color color{ r, g, b, 255 };
+    SDL_Color color{r, g, b, 255};
     SDL_Surface* surface = TTF_RenderText_Blended(m_font, text.c_str(), color);
     if (!surface) return;
 
@@ -214,7 +730,6 @@ void Application::run() {
         m_lastTime = now;
         m_accumulator += frameTime;
 
-        // Process input every frame for responsiveness
         while (SDL_PollEvent(&event)) {
             if (event.type == SDL_QUIT) {
                 m_running = false;
@@ -222,13 +737,11 @@ void Application::run() {
             m_screenManager.handleEvent(event);
         }
 
-        // Fixed-timestep updates
         while (m_accumulator >= FIXED_DT) {
             m_screenManager.update(FIXED_DT);
             m_accumulator -= FIXED_DT;
         }
 
-        // Render
         SDL_SetRenderDrawColor(m_renderer, 0, 0, 0, 255);
         SDL_RenderClear(m_renderer);
         m_screenManager.render(m_renderer);
@@ -238,107 +751,6 @@ void Application::run() {
 
 void Application::quit() {
     m_running = false;
-}
-
-// ============================================================================
-// Helper: draw a centered title and an ESC hint
-// ============================================================================
-
-static void drawScreenLabel(SDL_Renderer* renderer, TTF_Font* font,
-                            const std::string& title) {
-    if (!font) return;
-    SDL_Color color{ 255, 255, 255, 255 };
-    SDL_Surface* surface = TTF_RenderText_Blended(font, title.c_str(), color);
-    if (!surface) return;
-    SDL_Texture* texture = SDL_CreateTextureFromSurface(renderer, surface);
-    if (texture) {
-        int w = surface->w;
-        int h = surface->h;
-        SDL_Rect dst{ (1280 - w) / 2, 80, w, h };
-        SDL_RenderCopy(renderer, texture, nullptr, &dst);
-        SDL_DestroyTexture(texture);
-    }
-    SDL_FreeSurface(surface);
-}
-
-static void drawEscHint(SDL_Renderer* renderer, TTF_Font* font) {
-    if (!font) return;
-    SDL_Color color{ 180, 180, 180, 255 };
-    SDL_Surface* surface = TTF_RenderText_Blended(font, "Press ESC for Main Menu", color);
-    if (!surface) return;
-    SDL_Texture* texture = SDL_CreateTextureFromSurface(renderer, surface);
-    if (texture) {
-        int w = surface->w;
-        int h = surface->h;
-        SDL_Rect dst{ (1280 - w) / 2, 660, w, h };
-        SDL_RenderCopy(renderer, texture, nullptr, &dst);
-        SDL_DestroyTexture(texture);
-    }
-    SDL_FreeSurface(surface);
-}
-
-static void drawText(SDL_Renderer* renderer, TTF_Font* font, const std::string& text,
-                     int x, int y, unsigned char r, unsigned char g, unsigned char b) {
-    if (!font || text.empty()) return;
-    SDL_Color color{r, g, b, 255};
-    SDL_Surface* surface = TTF_RenderText_Blended(font, text.c_str(), color);
-    if (!surface) return;
-    SDL_Texture* texture = SDL_CreateTextureFromSurface(renderer, surface);
-    if (texture) {
-        SDL_Rect dst{x, y, surface->w, surface->h};
-        SDL_RenderCopy(renderer, texture, nullptr, &dst);
-        SDL_DestroyTexture(texture);
-    }
-    SDL_FreeSurface(surface);
-}
-
-static void drawTextCentered(SDL_Renderer* renderer, TTF_Font* font, const std::string& text,
-                             int cx, int cy, unsigned char r, unsigned char g, unsigned char b) {
-    if (!font || text.empty()) return;
-    SDL_Color color{r, g, b, 255};
-    SDL_Surface* surface = TTF_RenderText_Blended(font, text.c_str(), color);
-    if (!surface) return;
-    SDL_Texture* texture = SDL_CreateTextureFromSurface(renderer, surface);
-    if (texture) {
-        int x = cx - surface->w / 2;
-        int y = cy - surface->h / 2;
-        SDL_Rect dst{x, y, surface->w, surface->h};
-        SDL_RenderCopy(renderer, texture, nullptr, &dst);
-        SDL_DestroyTexture(texture);
-    }
-    SDL_FreeSurface(surface);
-}
-
-static std::string rankDisplay(const Card& card) {
-    char c = card.rankChar();
-    if (c == 'T') return "10";
-    return std::string(1, c);
-}
-
-static bool isRedSuit(const Card& card) {
-    return card.suit() == Suit::Hearts || card.suit() == Suit::Diamonds;
-}
-
-static bool handleEscToMenu(const SDL_Event& event, Application* app) {
-    if (event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_ESCAPE) {
-        app->screenManager().transitionTo(AppState::MainMenu);
-        return true;
-    }
-    return false;
-}
-
-static void renderButtons(SDL_Renderer* renderer, TTF_Font* font,
-                          std::vector<Button>& buttons) {
-    for (auto& btn : buttons) {
-        btn.render(renderer, font);
-    }
-}
-
-static bool routeButtons(const SDL_Event& event, std::vector<Button>& buttons) {
-    for (auto& btn : buttons) {
-        if (btn.handleEvent(event)) return true;
-    }
-    return false;
 }
 
 // ============================================================================
@@ -357,26 +769,32 @@ void MainMenuScreen::setupButtons() {
     int by = 280;
     const int gap = 20;
 
-    auto makeBtn = [&](const std::string& label, AppState target) -> Button {
-        Button b;
-        b.x = bx; b.y = by; b.w = bw; b.h = bh;
-        b.label = label;
-        b.onClick = [this, target]() { m_app->screenManager().transitionTo(target); };
+    auto addBtn = [&](const std::string& label, AppState target) {
+        m_buttons.push_back(std::make_unique<Button>(
+            bx, by, bw, bh, label,
+            [this, target]() { m_app->screenManager().transitionTo(target); },
+            m_app->font()));
+        m_buttons.back()->theme = &m_app->theme();
         by += bh + gap;
-        return b;
     };
 
-    m_buttons.push_back(makeBtn("Single Player", AppState::InRound));
-    m_buttons.push_back(makeBtn("Multiplayer",   AppState::Lobby));
-    m_buttons.push_back(makeBtn("Settings",      AppState::Settings));
-    m_buttons.push_back(makeBtn("Achievements",    AppState::Achievements));
-    m_buttons.push_back(makeBtn("Exit",            AppState::MainMenu));
-    // Override the last button's onClick to actually quit
-    m_buttons.back().onClick = [this]() { m_app->quit(); };
+    addBtn("Single Player", AppState::InRound);
+    addBtn("Multiplayer", AppState::Lobby);
+    addBtn("Settings", AppState::Settings);
+    addBtn("Achievements", AppState::Achievements);
+
+    // Exit button
+    m_buttons.push_back(std::make_unique<Button>(
+        bx, by, bw, bh, "Exit",
+        [this]() { m_app->quit(); },
+        m_app->font()));
+    m_buttons.back()->theme = &m_app->theme();
 }
 
 void MainMenuScreen::onEnter() {
-    for (auto& btn : m_buttons) btn.hovered = false;
+    for (auto& btn : m_buttons) {
+        btn->resetState();
+    }
 }
 
 void MainMenuScreen::handleEvent(const SDL_Event& event) {
@@ -389,31 +807,14 @@ void MainMenuScreen::handleEvent(const SDL_Event& event) {
 void MainMenuScreen::update(float /*deltaTime*/) {}
 
 void MainMenuScreen::render(SDL_Renderer* renderer) {
-    // Dark background
     SDL_SetRenderDrawColor(renderer, 30, 30, 35, 255);
     SDL_RenderClear(renderer);
 
-    // Title
     drawScreenLabel(renderer, m_app->font(), "BLACKJACK");
+    drawTextCentered(renderer, m_app->font(), "Phase 6 — Asset & Rendering Systems",
+                     640, 150, 200, 180, 120);
 
-    // Subtitle
-    if (m_app->font()) {
-        SDL_Color color{ 200, 180, 120, 255 };
-        SDL_Surface* surface = TTF_RenderText_Blended(m_app->font(), "Phase 5 — Basic Gameplay UI", color);
-        if (surface) {
-            SDL_Texture* texture = SDL_CreateTextureFromSurface(renderer, surface);
-            if (texture) {
-                int w = surface->w;
-                int h = surface->h;
-                SDL_Rect dst{ (1280 - w) / 2, 150, w, h };
-                SDL_RenderCopy(renderer, texture, nullptr, &dst);
-                SDL_DestroyTexture(texture);
-            }
-            SDL_FreeSurface(surface);
-        }
-    }
-
-    renderButtons(renderer, m_app->font(), m_buttons);
+    renderButtons(renderer, m_buttons);
 }
 
 // ============================================================================
@@ -425,7 +826,7 @@ LobbyScreen::LobbyScreen(Application* app)
 
 void LobbyScreen::handleEvent(const SDL_Event& event) {
     if (handleEscToMenu(event, m_app)) return;
-    routeButtons(event, m_buttons);
+    if (routeButtons(event, m_buttons)) return;
 }
 
 void LobbyScreen::update(float /*deltaTime*/) {}
@@ -447,7 +848,7 @@ SettingsScreen::SettingsScreen(Application* app)
 
 void SettingsScreen::handleEvent(const SDL_Event& event) {
     if (handleEscToMenu(event, m_app)) return;
-    routeButtons(event, m_buttons);
+    if (routeButtons(event, m_buttons)) return;
 }
 
 void SettingsScreen::update(float /*deltaTime*/) {}
@@ -489,18 +890,11 @@ void GameTableScreen::rebuildUI() {
     m_buttons.clear();
     if (!m_round) return;
 
-    const int bw = 100;
-    const int bh = 40;
-    const int gap = 10;
-    int startX = 340;
-
     auto addBtn = [&](const std::string& label, int x, int y, int w, int h,
                       std::function<void()> cb) {
-        Button b;
-        b.x = x; b.y = y; b.w = w; b.h = h;
-        b.label = label;
-        b.onClick = std::move(cb);
-        m_buttons.push_back(b);
+        m_buttons.push_back(std::make_unique<Button>(
+            x, y, w, h, label, std::move(cb), m_app->font()));
+        m_buttons.back()->theme = &m_app->theme();
     };
 
     switch (m_round->phase()) {
@@ -512,23 +906,30 @@ void GameTableScreen::rebuildUI() {
         }
         case RoundPhase::InsuranceOffer: {
             addBtn("Yes", 490, 400, 120, 50, [this]() { onInsuranceYes(); });
-            addBtn("No",  670, 400, 120, 50, [this]() { onInsuranceNo(); });
+            addBtn("No", 670, 400, 120, 50, [this]() { onInsuranceNo(); });
             break;
         }
         case RoundPhase::PlayerTurns: {
             auto actions = m_round->getLegalActions(0, m_round->currentHandIndex());
-            int bx = startX;
+            int bx = 340;
+            const int bw = 100;
+            const int bh = 40;
+            const int gap = 10;
             if (actions.canHit) {
-                addBtn("Hit", bx, 620, bw, bh, [this]() { onHit(); }); bx += bw + gap;
+                addBtn("Hit", bx, 620, bw, bh, [this]() { onHit(); });
+                bx += bw + gap;
             }
             if (actions.canStand) {
-                addBtn("Stand", bx, 620, bw, bh, [this]() { onStand(); }); bx += bw + gap;
+                addBtn("Stand", bx, 620, bw, bh, [this]() { onStand(); });
+                bx += bw + gap;
             }
             if (actions.canDouble) {
-                addBtn("Double", bx, 620, bw, bh, [this]() { onDouble(); }); bx += bw + gap;
+                addBtn("Double", bx, 620, bw, bh, [this]() { onDouble(); });
+                bx += bw + gap;
             }
             if (actions.canSplit) {
-                addBtn("Split", bx, 620, bw, bh, [this]() { onSplit(); }); bx += bw + gap;
+                addBtn("Split", bx, 620, bw, bh, [this]() { onSplit(); });
+                bx += bw + gap;
             }
             if (actions.canSurrender) {
                 addBtn("Surrender", bx, 620, bw + 20, bh, [this]() { onSurrender(); });
@@ -844,19 +1245,15 @@ void GameTableScreen::renderDealer(SDL_Renderer* r) {
     const int cw = 70;
     const int overlap = 20;
 
-    int totalCards = holeVisible ? cardCount : cardCount + 1;
-    int totalWidth = totalCards * cw - (totalCards - 1) * overlap;
+    int totalWidth = cardCount * cw - (cardCount - 1) * overlap;
     int startX = (1280 - totalWidth) / 2;
 
-    for (int i = 0; i < totalCards; ++i) {
+    for (int i = 0; i < cardCount; ++i) {
         int cx = startX + i * (cw - overlap);
         if (!holeVisible && i == 1) {
             renderCardBack(r, cx, 80);
         } else {
-            int handIdx = holeVisible ? i : 0;
-            if (handIdx < cardCount) {
-                renderCard(r, dealer.hand.cards()[handIdx], cx, 80, true);
-            }
+            renderCard(r, dealer.hand.cards()[i], cx, 80, true);
         }
     }
 }
@@ -933,7 +1330,7 @@ void GameTableScreen::render(SDL_Renderer* renderer) {
         drawTextCentered(renderer, m_app->font(), m_subMessage, 640, 270, 200, 200, 200);
     }
 
-    renderButtons(renderer, m_app->font(), m_buttons);
+    renderButtons(renderer, m_buttons);
     drawEscHint(renderer, m_app->font());
 }
 
@@ -946,7 +1343,7 @@ RoundResultsScreen::RoundResultsScreen(Application* app)
 
 void RoundResultsScreen::handleEvent(const SDL_Event& event) {
     if (handleEscToMenu(event, m_app)) return;
-    routeButtons(event, m_buttons);
+    if (routeButtons(event, m_buttons)) return;
 }
 
 void RoundResultsScreen::update(float /*deltaTime*/) {}
@@ -968,7 +1365,7 @@ AchievementsScreen::AchievementsScreen(Application* app)
 
 void AchievementsScreen::handleEvent(const SDL_Event& event) {
     if (handleEscToMenu(event, m_app)) return;
-    routeButtons(event, m_buttons);
+    if (routeButtons(event, m_buttons)) return;
 }
 
 void AchievementsScreen::update(float /*deltaTime*/) {}
