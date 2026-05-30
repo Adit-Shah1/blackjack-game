@@ -1,0 +1,33 @@
+# Build artifacts
+build/
+*.o
+*.a
+*.so
+*.dll
+*.exe
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+compile_commands.json
+CTestTestfile.cmake
+Testing/
+
+# macOS
+.DS_Store
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Dev-only documentation (not for public repo)
+blackjack-spec.md
+AGENT_REFERENCE.md
+IMPLEMENTATION_PLAN.md
+
+# Temporary files
+*.tmp
+*.log

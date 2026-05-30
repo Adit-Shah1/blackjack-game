@@ -1,0 +1,35 @@
+Checks: >
+  bugprone-*,
+  cert-*,
+  clang-diagnostic-unused,
+  cppcoreguidelines-*,
+  misc-*,
+  modernize-*,
+  performance-*,
+  portability-*,
+  readability-*,
+  -modernize-use-trailing-return-type,
+  -cppcoreguidelines-avoid-magic-numbers,
+  -readability-magic-numbers,
+  -cppcoreguidelines-pro-type-reinterpret-cast,
+  -cppcoreguidelines-pro-bounds-pointer-arithmetic,
+  -portability-restrict-system-includes
+
+WarningsAsErrors:
+  bugprone-*
+  cert-*
+  misc-*
+  performance-*
+
+FormatStyle: file
+CheckOptions:
+  readability-identifier-naming.ClassCase: CamelCase
+  readability-identifier-naming.StructCase: CamelCase
+  readability-identifier-naming.EnumCase: CamelCase
+  readability-identifier-naming.FunctionCase: CamelCase
+  readability-identifier-naming.VariableCase: lower_case
+  readability-identifier-naming.PrivateMemberPrefix: m_
+  readability-identifier-naming.ProtectedMemberPrefix: m_
+  readability-identifier-naming.MemberPrefix: m_
+  readability-identifier-naming.ConstantPrefix: k
+  readability-identifier-naming.GlobalConstantPrefix: k
