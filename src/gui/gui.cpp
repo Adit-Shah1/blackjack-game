@@ -40,7 +40,7 @@ static void drawText(SDL_Renderer* renderer, TTF_Font* font,
                      unsigned char r, unsigned char g, unsigned char b) {
     if (!font || text.empty()) return;
     SDL_Color color{r, g, b, 255};
-    SDL_Surface* surface = TTF_RenderText_Blended(font, text.c_str(), color);
+    SDL_Surface* surface = TTF_RenderUTF8_Blended(font, text.c_str(), color);
     if (!surface) return;
     SDL_Texture* texture = SDL_CreateTextureFromSurface(renderer, surface);
     if (texture) {
@@ -56,7 +56,7 @@ static void drawTextCentered(SDL_Renderer* renderer, TTF_Font* font,
                              unsigned char r, unsigned char g, unsigned char b) {
     if (!font || text.empty()) return;
     SDL_Color color{r, g, b, 255};
-    SDL_Surface* surface = TTF_RenderText_Blended(font, text.c_str(), color);
+    SDL_Surface* surface = TTF_RenderUTF8_Blended(font, text.c_str(), color);
     if (!surface) return;
     SDL_Texture* texture = SDL_CreateTextureFromSurface(renderer, surface);
     if (texture) {
@@ -109,6 +109,127 @@ static bool routeButtons(const SDL_Event& event,
         if (btn->handleEvent(event)) return true;
     }
     return false;
+}
+
+static void drawRoundedRect(SDL_Renderer* r, int x, int y, int w, int h, int rad, const Color& c) {
+    fillRect(r, x + rad, y, w - rad*2, h, c);
+    fillRect(r, x, y + rad, w, h - rad*2, c);
+    fillRect(r, x + rad, y + rad, rad, rad, c);
+    fillRect(r, x + w - rad*2, y + rad, rad, rad, c);
+    fillRect(r, x + rad, y + h - rad*2, rad, rad, c);
+    fillRect(r, x + w - rad*2, y + h - rad*2, rad, rad, c);
+}
+
+static void drawRoundedRectOutline(SDL_Renderer* r, int x, int y, int w, int h, int rad, const Color& c) {
+    SDL_SetRenderDrawColor(r, c.r, c.g, c.b, c.a);
+    SDL_RenderDrawLine(r, x + rad, y, x + w - rad - 1, y);
+    SDL_RenderDrawLine(r, x + rad, y + h - 1, x + w - rad - 1, y + h - 1);
+    SDL_RenderDrawLine(r, x, y + rad, x, y + h - rad - 1);
+    SDL_RenderDrawLine(r, x + w - 1, y + rad, x + w - 1, y + h - rad - 1);
+}
+
+static void drawShadow(SDL_Renderer* r, int x, int y, int w, int h, int offset, const Color& c) {
+    fillRect(r, x + offset, y + offset, w, h, c);
+}
+
+static void drawGradientRect(SDL_Renderer* r, int x, int y, int w, int h, const Color& top, const Color& bot) {
+    for (int row = 0; row < h; ++row) {
+        float t = static_cast<float>(row) / h;
+        uint8_t rc = static_cast<uint8_t>(top.r + (bot.r - top.r) * t);
+        uint8_t gc = static_cast<uint8_t>(top.g + (bot.g - top.g) * t);
+        uint8_t bc = static_cast<uint8_t>(top.b + (bot.b - top.b) * t);
+        uint8_t ac = static_cast<uint8_t>(top.a + (bot.a - top.a) * t);
+        SDL_SetRenderDrawColor(r, rc, gc, bc, ac);
+        SDL_RenderDrawLine(r, x, y + row, x + w - 1, y + row);
+    }
+}
+
+static void drawBitmap(SDL_Renderer* r, int x, int y, int scale,
+                       const char* const bitmap[], int rows, int cols,
+                       const Color& color) {
+    SDL_SetRenderDrawColor(r, color.r, color.g, color.b, color.a);
+    for (int row = 0; row < rows; ++row) {
+        const char* line = bitmap[row];
+        for (int col = 0; col < cols; ++col) {
+            if (line[col] == '#') {
+                SDL_Rect pixel{ x + col * scale, y + row * scale, scale, scale };
+                SDL_RenderFillRect(r, &pixel);
+            }
+        }
+    }
+}
+
+static void drawSuitSymbol(SDL_Renderer* r, Suit suit, int cx, int cy, int scale, const Color& color) {
+    // 11x11 bitmaps, drawn centered at (cx, cy)
+    static const char* HEART[] = {
+        "...........",
+        "..##...##..",
+        ".####.####.",
+        ".#########.",
+        ".#########.",
+        ".#########.",
+        "..#######..",
+        "...#####...",
+        "....###....",
+        ".....#.....",
+        "...........",
+    };
+    static const char* DIAMOND[] = {
+        "...........",
+        ".....#.....",
+        "....###....",
+        "...#####...",
+        "..#######..",
+        ".#########.",
+        "..#######..",
+        "...#####...",
+        "....###....",
+        ".....#.....",
+        "...........",
+    };
+    static const char* SPADE[] = {
+        "...........",
+        ".....#.....",
+        "....###....",
+        "...#####...",
+        "..#######..",
+        ".#########.",
+        ".#########.",
+        "..#######..",
+        "...#####...",
+        "....###....",
+        "....###....",
+    };
+    static const char* CLUB[] = {
+        "...........",
+        "....###....",
+        "...#####...",
+        "..#######..",
+        "...#####...",
+        ".#########.",
+        "..#######..",
+        "...#####...",
+        "....###....",
+        "....###....",
+        "....###....",
+    };
+
+    const char* const* bitmap = nullptr;
+    switch (suit) {
+        case Suit::Hearts:   bitmap = HEART;   break;
+        case Suit::Diamonds: bitmap = DIAMOND; break;
+        case Suit::Spades:   bitmap = SPADE;   break;
+        case Suit::Clubs:    bitmap = CLUB;    break;
+    }
+    if (!bitmap) return;
+
+    const int rows = 11;
+    const int cols = 11;
+    int w = cols * scale;
+    int h = rows * scale;
+    int x = cx - w / 2;
+    int y = cy - h / 2;
+    drawBitmap(r, x, y, scale, bitmap, rows, cols, color);
 }
 
 // ============================================================================
@@ -229,25 +350,22 @@ void Button::render(SDL_Renderer* renderer) {
 
     const Theme t = theme ? *theme : Theme{};
 
-    Color bg = !enabled ? Color{40, 40, 40, 200} :
-               (m_pressed && enabled ? t.buttonPressed :
-                (m_hovered && enabled ? t.buttonHover : t.buttonNormal));
+    Color bgTop = !enabled ? Color{40, 40, 40, 200} :
+                  (m_pressed && enabled ? t.buttonPressed :
+                   (m_hovered && enabled ? t.buttonHover : t.buttonNormal));
+    Color bgBot = bgTop;
+    bgBot.r = static_cast<uint8_t>(bgBot.r * 0.85f);
+    bgBot.g = static_cast<uint8_t>(bgBot.g * 0.85f);
+    bgBot.b = static_cast<uint8_t>(bgBot.b * 0.85f);
 
-    SDL_Color sdlBg = toSDL(bg);
-    SDL_SetRenderDrawColor(renderer, sdlBg.r, sdlBg.g, sdlBg.b, sdlBg.a);
-    SDL_Rect rect{x, y, w, h};
-    SDL_RenderFillRect(renderer, &rect);
+    // Shadow
+    drawShadow(renderer, x, y, w, h, 3, {0, 0, 0, 80});
 
-    // Border
-    if (m_hovered && enabled) {
-        SDL_Color sdlGold = toSDL(t.goldAccent);
-        SDL_SetRenderDrawColor(renderer, sdlGold.r, sdlGold.g, sdlGold.b, 180);
-        SDL_RenderDrawRect(renderer, &rect);
-    } else {
-        SDL_Color sdlBorder = toSDL(t.textSecondary);
-        SDL_SetRenderDrawColor(renderer, sdlBorder.r, sdlBorder.g, sdlBorder.b, sdlBorder.a);
-        SDL_RenderDrawRect(renderer, &rect);
-    }
+    // Gradient rounded button body
+    drawGradientRect(renderer, x, y, w, h, bgTop, bgBot);
+    drawRoundedRect(renderer, x, y, w, h, 6, bgTop);
+    drawRoundedRectOutline(renderer, x, y, w, h, 6,
+        (m_hovered && enabled) ? Color{255, 215, 0, 180} : Color{100, 100, 100, 120});
 
     // Label
     if (m_font && !label.empty()) {
@@ -1196,12 +1314,12 @@ void GameTableScreen::renderCard(SDL_Renderer* r, const Card& card, int x, int y
         return;
     }
 
-    SDL_SetRenderDrawColor(r, 255, 255, 255, 255);
-    SDL_Rect bg{x, y, cw, ch};
-    SDL_RenderFillRect(r, &bg);
+    // Shadow
+    drawShadow(r, x, y, cw, ch, 2, {0, 0, 0, 100});
 
-    SDL_SetRenderDrawColor(r, 0, 0, 0, 255);
-    SDL_RenderDrawRect(r, &bg);
+    // White rounded card face
+    drawRoundedRect(r, x, y, cw, ch, 4, {255, 255, 255, 255});
+    drawRoundedRectOutline(r, x, y, cw, ch, 4, {180, 180, 180, 255});
 
     bool red = isRedSuit(card);
     unsigned char rc = red ? 212 : 26;
@@ -1209,23 +1327,25 @@ void GameTableScreen::renderCard(SDL_Renderer* r, const Card& card, int x, int y
     unsigned char bc = red ? 0 : 26;
 
     std::string rank = rankDisplay(card);
-    std::string suit(1, card.suitChar());
+    Color suitColor{rc, gc, bc, 255};
 
     drawText(r, m_app->font(), rank, x + 4, y + 2, rc, gc, bc);
-    drawText(r, m_app->font(), suit, x + 4, y + 24, rc, gc, bc);
-    drawTextCentered(r, m_app->font(), rank, x + cw / 2, y + ch / 2, rc, gc, bc);
+    drawSuitSymbol(r, card.suit(), x + 4 + 6, y + 24 + 5, 1, suitColor);
+    drawSuitSymbol(r, card.suit(), x + cw / 2, y + ch / 2, 2, suitColor);
+
+    // Bottom-right mirrored suit
+    drawSuitSymbol(r, card.suit(), x + cw - 8, y + ch - 12, 1, suitColor);
 }
 
 void GameTableScreen::renderCardBack(SDL_Renderer* r, int x, int y) {
     const int cw = 70;
     const int ch = 98;
 
-    SDL_SetRenderDrawColor(r, 26, 58, 110, 255);
-    SDL_Rect bg{x, y, cw, ch};
-    SDL_RenderFillRect(r, &bg);
+    // Shadow
+    drawShadow(r, x, y, cw, ch, 2, {0, 0, 0, 100});
 
-    SDL_SetRenderDrawColor(r, 60, 100, 160, 255);
-    SDL_RenderDrawRect(r, &bg);
+    drawRoundedRect(r, x, y, cw, ch, 4, {26, 58, 110, 255});
+    drawRoundedRectOutline(r, x, y, cw, ch, 4, {60, 100, 160, 255});
 
     SDL_SetRenderDrawColor(r, 60, 100, 160, 255);
     for (int i = 0; i < cw; i += 8) {
@@ -1308,20 +1428,37 @@ void GameTableScreen::renderStatus(SDL_Renderer* r) {
 }
 
 void GameTableScreen::render(SDL_Renderer* renderer) {
+    // Table felt background with subtle crosshatch
     SDL_SetRenderDrawColor(renderer, 45, 90, 39, 255);
     SDL_RenderClear(renderer);
+    SDL_SetRenderDrawColor(renderer, 40, 82, 35, 255);
+    for (int i = 0; i < 1280; i += 24) {
+        SDL_RenderDrawLine(renderer, i, 0, i, 720);
+    }
+    for (int i = 0; i < 720; i += 24) {
+        SDL_RenderDrawLine(renderer, 0, i, 1280, i);
+    }
 
-    SDL_SetRenderDrawColor(renderer, 35, 70, 30, 255);
-    SDL_Rect dealerArea{ 340, 30, 600, 170 };
-    SDL_RenderFillRect(renderer, &dealerArea);
+    // Oval dealer area with shadow
+    drawShadow(renderer, 340, 30, 600, 170, 6, {0, 0, 0, 120});
+    drawRoundedRect(renderer, 340, 30, 600, 170, 12, {35, 70, 30, 255});
+    drawRoundedRectOutline(renderer, 340, 30, 600, 170, 12, {60, 110, 50, 255});
 
-    SDL_SetRenderDrawColor(renderer, 35, 70, 30, 255);
-    SDL_Rect playerArea{ 340, 350, 600, 220 };
-    SDL_RenderFillRect(renderer, &playerArea);
+    // Player area with shadow
+    drawShadow(renderer, 340, 350, 600, 220, 6, {0, 0, 0, 120});
+    drawRoundedRect(renderer, 340, 350, 600, 220, 12, {35, 70, 30, 255});
+    drawRoundedRectOutline(renderer, 340, 350, 600, 220, 12, {60, 110, 50, 255});
 
     renderDealer(renderer);
     renderPlayer(renderer);
     renderStatus(renderer);
+
+    // Message panel
+    if (!m_message.empty() || !m_subMessage.empty()) {
+        drawShadow(renderer, 440, 220, 400, 80, 4, {0, 0, 0, 100});
+        drawRoundedRect(renderer, 440, 220, 400, 80, 8, {20, 20, 25, 200});
+        drawRoundedRectOutline(renderer, 440, 220, 400, 80, 8, {60, 60, 70, 200});
+    }
 
     if (!m_message.empty()) {
         drawTextCentered(renderer, m_app->font(), m_message, 640, 240, 255, 255, 255);
