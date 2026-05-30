@@ -6,6 +6,8 @@
 #include <unordered_map>
 #include <functional>
 
+#include <blackjack/round.h>
+
 // SDL forward declarations
 struct SDL_Window;
 struct SDL_Renderer;
@@ -174,13 +176,44 @@ private:
 class GameTableScreen : public Screen {
 public:
     explicit GameTableScreen(Application* app);
+    ~GameTableScreen() override;
 
+    void onEnter() override;
     void handleEvent(const SDL_Event& event) override;
     void update(float deltaTime) override;
     void render(SDL_Renderer* renderer) override;
 
 private:
     Application* m_app;
+    std::unique_ptr<RoundState> m_round;
+    RoundPhase m_lastPhase = RoundPhase::RoundComplete;
+    int m_currentBet = 100;
+    std::vector<Button> m_buttons;
+    float m_autoAdvanceTimer = 0.0f;
+    bool m_needsUIRebuild = false;
+    std::string m_message;
+    std::string m_subMessage;
+
+    void rebuildUI();
+    void updateMessage();
+
+    void onBetMinus();
+    void onBetPlus();
+    void onDeal();
+    void onHit();
+    void onStand();
+    void onDouble();
+    void onSplit();
+    void onSurrender();
+    void onInsuranceYes();
+    void onInsuranceNo();
+    void onNextRound();
+
+    void renderCard(SDL_Renderer* r, const Card& card, int x, int y, bool faceUp);
+    void renderCardBack(SDL_Renderer* r, int x, int y);
+    void renderDealer(SDL_Renderer* r);
+    void renderPlayer(SDL_Renderer* r);
+    void renderStatus(SDL_Renderer* r);
 };
 
 class RoundResultsScreen : public Screen {

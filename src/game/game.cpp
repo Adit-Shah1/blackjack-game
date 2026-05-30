@@ -235,7 +235,7 @@ bool RoundState::takeInsurance(int seatIndex, int amount) {
 bool RoundState::allPlayerHandsFinished() const {
     for (const auto& seat : m_seats) {
         for (const auto& hand : seat.hands) {
-            if (hand.outcome == HandOutcome::Pending) {
+            if (!hand.finished) {
                 return false;
             }
         }
