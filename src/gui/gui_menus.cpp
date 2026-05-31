@@ -217,7 +217,7 @@ void LobbyScreen::handleEvent(const SDL_Event& event) {
     if (m_state == LobbyState::NameEntry) {
         if (event.type == SDL_TEXTINPUT) {
             if (m_currentNameInput.size() < 16) {
-                m_currentNameInput += event.text.text;
+                m_currentNameInput += event.text.text;  // NOLINT(cppcoreguidelines-pro-bounds-array-to-pointer-decay)
             }
             return;
         }

@@ -8,7 +8,7 @@ NamespaceIndentation: None
 BreakBeforeBraces: Attach
 AllowShortFunctionsOnASingleLine: Inline
 AllowShortIfStatementsOnASingleLine: Never
-AllowShortLoopsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
 IndentCaseLabels: false
 SpaceAfterCStyleCast: false
 SpaceBeforeParens: ControlStatements

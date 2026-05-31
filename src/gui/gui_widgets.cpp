@@ -19,7 +19,9 @@ SDL_Texture* TextureManager::load(SDL_Renderer* renderer,
                                   const std::string& key,
                                   const std::string& filepath) {
     auto it = m_textures.find(key);
-    if (it != m_textures.end()) return it->second;
+    if (it != m_textures.end()) {
+        return it->second;
+    }
 
     SDL_Texture* texture = IMG_LoadTexture(renderer, filepath.c_str());
     if (!texture) {
@@ -37,14 +39,18 @@ SDL_Texture* TextureManager::load(SDL_Renderer* renderer,
 
 SDL_Texture* TextureManager::get(const std::string& key) {
     auto it = m_textures.find(key);
-    if (it != m_textures.end()) return it->second;
+    if (it != m_textures.end()) {
+        return it->second;
+    }
     return nullptr;
 }
 
 void TextureManager::clear() {
     for (auto& [k, texture] : m_textures) {
         (void)k;
-        if (texture) SDL_DestroyTexture(texture);
+        if (texture) {
+            SDL_DestroyTexture(texture);
+        }
     }
     m_textures.clear();
 }
@@ -73,7 +79,9 @@ TTF_Font* FontManager::load(const std::string& key,
 
 TTF_Font* FontManager::get(const std::string& key) {
     auto it = m_fonts.find(key);
-    if (it != m_fonts.end()) return it->second;
+    if (it != m_fonts.end()) {
+        return it->second;
+    }
     return nullptr;
 }
 
@@ -84,7 +92,9 @@ void FontManager::registerFont(const std::string& key, TTF_Font* font) {
 void FontManager::clear() {
     for (auto& [k, font] : m_fonts) {
         (void)k;
-        if (font) TTF_CloseFont(font);
+        if (font) {
+            TTF_CloseFont(font);
+        }
     }
     m_fonts.clear();
 }
@@ -109,7 +119,9 @@ void Button::resetState() {
 }
 
 void Button::render(SDL_Renderer* renderer) {
-    if (!visible) return;
+    if (!visible) {
+        return;
+    }
 
     float scale = 1.0f;
     if (m_pressed && enabled) {
@@ -162,7 +174,9 @@ void Button::render(SDL_Renderer* renderer) {
 }
 
 bool Button::handleEvent(const SDL_Event& event) {
-    if (!enabled || !visible) return false;
+    if (!enabled || !visible) {
+        return false;
+    }
 
     if (event.type == SDL_MOUSEMOTION) {
         bool inside = contains(event.motion.x, event.motion.y);
@@ -203,7 +217,9 @@ void Label::setFont(TTF_Font* font) {
 }
 
 void Label::render(SDL_Renderer* renderer) {
-    if (!visible || text.empty() || !m_font) return;
+    if (!visible || text.empty() || !m_font) {
+        return;
+    }
 
     Color c = color;
     SDL_Color sdlColor = toSDL(c);
@@ -239,21 +255,29 @@ void Panel::addWidget(std::unique_ptr<Widget> widget) {
 }
 
 void Panel::render(SDL_Renderer* renderer) {
-    if (!visible) return;
+    if (!visible) {
+        return;
+    }
 
     if (backgroundColor.a > 0) {
         fillRect(renderer, bounds.x, bounds.y, bounds.w, bounds.h, backgroundColor);
     }
 
     for (auto& child : children) {
-        if (child->visible) child->render(renderer);
+        if (child->visible) {
+            child->render(renderer);
+        }
     }
 }
 
 bool Panel::handleEvent(const SDL_Event& event) {
-    if (!enabled || !visible) return false;
+    if (!enabled || !visible) {
+        return false;
+    }
     for (auto it = children.rbegin(); it != children.rend(); ++it) {
-        if ((*it)->handleEvent(event)) return true;
+        if ((*it)->handleEvent(event)) {
+            return true;
+        }
     }
     return false;
 }
@@ -277,12 +301,16 @@ void Slider::updateValueFromMouse(int mx) {
     int newValue = m_minVal + static_cast<int>(t * (m_maxVal - m_minVal));
     if (newValue != value) {
         value = newValue;
-        if (onValueChanged) onValueChanged(value);
+        if (onValueChanged) {
+            onValueChanged(value);
+        }
     }
 }
 
 void Slider::render(SDL_Renderer* renderer) {
-    if (!visible) return;
+    if (!visible) {
+        return;
+    }
 
     // Track
     int trackY = bounds.y + bounds.h / 2 - 2;
@@ -302,7 +330,9 @@ void Slider::render(SDL_Renderer* renderer) {
 }
 
 bool Slider::handleEvent(const SDL_Event& event) {
-    if (!enabled || !visible) return false;
+    if (!enabled || !visible) {
+        return false;
+    }
 
     if (event.type == SDL_MOUSEBUTTONDOWN && event.button.button == SDL_BUTTON_LEFT) {
         if (contains(event.button.x, event.button.y)) {
@@ -351,17 +381,24 @@ void Modal::rebuildButtons() {
 
     for (size_t i = 0; i < buttonLabels.size(); ++i) {
         auto btn = std::make_unique<Button>(
-            startX + static_cast<int>(i) * (btnW + gap), y, btnW, btnH,
-            buttonLabels[i],
-            [this, i]() { if (onResult) onResult(static_cast<int>(i)); },
+            startX + static_cast<int>(i) * (btnW + gap), y, btnW, btnH, buttonLabels[i],
+            [this, i]() {
+                if (onResult) {
+                    onResult(static_cast<int>(i));
+                }
+            },
             m_font);
-        if (theme) btn->theme = theme;
+        if (theme) {
+            btn->theme = theme;
+        }
         m_buttons.push_back(std::move(btn));
     }
 }
 
 void Modal::render(SDL_Renderer* renderer) {
-    if (!visible) return;
+    if (!visible) {
+        return;
+    }
 
     // Semi-transparent overlay
     fillRect(renderer, 0, 0, 1280, 720, {0, 0, 0, 170});
@@ -383,14 +420,20 @@ void Modal::render(SDL_Renderer* renderer) {
         rebuildButtons();
     }
     for (auto& btn : m_buttons) {
-        if (btn->visible) btn->render(renderer);
+        if (btn->visible) {
+            btn->render(renderer);
+        }
     }
 }
 
 bool Modal::handleEvent(const SDL_Event& event) {
-    if (!enabled || !visible) return false;
+    if (!enabled || !visible) {
+        return false;
+    }
     for (auto& btn : m_buttons) {
-        if (btn->handleEvent(event)) return true;
+        if (btn->handleEvent(event)) {
+            return true;
+        }
     }
     return false;
 }
@@ -414,7 +457,9 @@ bool Toast::isExpired() const {
 }
 
 void Toast::render(SDL_Renderer* renderer) {
-    if (!visible || isExpired()) return;
+    if (!visible || isExpired()) {
+        return;
+    }
 
     float t = elapsed / duration;
     uint8_t alpha = static_cast<uint8_t>((1.0f - t) * 255);

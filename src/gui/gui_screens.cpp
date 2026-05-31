@@ -86,7 +86,7 @@ void AchievementsScreen::loadAchievements() {
                 }
             }
         }
-    } catch (...) {
+    } catch (...) {  // NOLINT(bugprone-empty-catch)
         // Use defaults on any error
     }
 }

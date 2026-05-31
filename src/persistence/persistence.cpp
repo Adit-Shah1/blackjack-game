@@ -19,7 +19,9 @@ static std::string cardToString(const Card& card) {
 }
 
 static Card cardFromString(const std::string& str) {
-    if (str.size() != 2) return Card();
+    if (str.size() != 2) {
+        return Card();
+    }
     char r = str[0];
     char s = str[1];
 
@@ -195,11 +197,17 @@ bool PersistenceManager::ensureDirectoryExists(const std::string& path) const {
 }
 
 bool PersistenceManager::createProfile(const std::string& name) {
-    if (name.empty() || name.size() > 16) return false;
-    if (profileExists(name)) return false;
+    if (name.empty() || name.size() > 16) {
+        return false;
+    }
+    if (profileExists(name)) {
+        return false;
+    }
 
     std::string dir = getSaveDirectory() + "/profiles";
-    if (!ensureDirectoryExists(dir)) return false;
+    if (!ensureDirectoryExists(dir)) {
+        return false;
+    }
 
     PlayerProfile profile;
     profile.name = name;
@@ -223,14 +231,16 @@ std::vector<std::string> PersistenceManager::listProfiles() const {
     std::string dir = getSaveDirectory() + "/profiles";
 
     try {
-        if (!std::filesystem::exists(dir)) return profiles;
+        if (!std::filesystem::exists(dir)) {
+            return profiles;
+        }
 
         for (const auto& entry : std::filesystem::directory_iterator(dir)) {
             if (entry.is_regular_file() && entry.path().extension() == ".json") {
                 profiles.push_back(entry.path().stem().string());
             }
         }
-    } catch (...) {
+    } catch (...) {  // NOLINT(bugprone-empty-catch)
         // Return empty list on error
     }
 
@@ -251,16 +261,22 @@ PlayerProfile PersistenceManager::loadProfile(const std::string& name) const {
 
     try {
         std::string path = getProfilePath(name);
-        if (!std::filesystem::exists(path)) return profile;
+        if (!std::filesystem::exists(path)) {
+            return profile;
+        }
 
         std::ifstream file(path);
-        if (!file.is_open()) return profile;
+        if (!file.is_open()) {
+            return profile;
+        }
 
         nlohmann::json j = nlohmann::json::parse(file, nullptr, false);
-        if (j.is_discarded()) return profile;
+        if (j.is_discarded()) {
+            return profile;
+        }
 
         profile = j.get<PlayerProfile>();
-    } catch (...) {
+    } catch (...) {  // NOLINT(bugprone-empty-catch)
         // Return default profile on error
     }
 
@@ -270,11 +286,15 @@ PlayerProfile PersistenceManager::loadProfile(const std::string& name) const {
 bool PersistenceManager::saveProfile(const PlayerProfile& profile) {
     try {
         std::string dir = getSaveDirectory() + "/profiles";
-        if (!ensureDirectoryExists(dir)) return false;
+        if (!ensureDirectoryExists(dir)) {
+            return false;
+        }
 
         std::string path = getProfilePath(profile.name);
         std::ofstream file(path);
-        if (!file.is_open()) return false;
+        if (!file.is_open()) {
+            return false;
+        }
 
         nlohmann::json j = profile;
         file << j.dump(4);
@@ -287,11 +307,15 @@ bool PersistenceManager::saveProfile(const PlayerProfile& profile) {
 bool PersistenceManager::saveGame(const std::string& profileName, const SaveState& state) {
     try {
         std::string dir = getSaveDirectory() + "/saves";
-        if (!ensureDirectoryExists(dir)) return false;
+        if (!ensureDirectoryExists(dir)) {
+            return false;
+        }
 
         std::string path = getSaveFilePath(profileName);
         std::ofstream file(path);
-        if (!file.is_open()) return false;
+        if (!file.is_open()) {
+            return false;
+        }
 
         nlohmann::json j = state.toJson();
         file << j.dump(4);
@@ -307,16 +331,22 @@ SaveState PersistenceManager::loadGame(const std::string& profileName) const {
 
     try {
         std::string path = getSaveFilePath(profileName);
-        if (!std::filesystem::exists(path)) return state;
+        if (!std::filesystem::exists(path)) {
+            return state;
+        }
 
         std::ifstream file(path);
-        if (!file.is_open()) return state;
+        if (!file.is_open()) {
+            return state;
+        }
 
         nlohmann::json j = nlohmann::json::parse(file, nullptr, false);
-        if (j.is_discarded()) return state;
+        if (j.is_discarded()) {
+            return state;
+        }
 
         state = SaveState::fromJson(j);
-    } catch (...) {
+    } catch (...) {  // NOLINT(bugprone-empty-catch)
         // Return default state on error
     }
 
@@ -395,7 +425,9 @@ bool GameSession::loadGame(const std::string& profileName) {
 }
 
 bool GameSession::saveGame() {
-    if (m_profileName.empty()) return false;
+    if (m_profileName.empty()) {
+        return false;
+    }
     SaveState state = buildSaveState();
     bool ok = m_persistence.saveGame(m_profileName, state);
     if (ok) {
@@ -570,11 +602,15 @@ void GameSession::recordBlackjack() {
 
 void GameSession::checkAchievements() {
     for (auto& ach : m_achievements) {
-        if (ach.unlocked) continue;
+        if (ach.unlocked) {
+            continue;
+        }
 
         switch (ach.id) {
             case AchievementId::FirstBlackjack:
-                if (m_stats.blackjacks >= 1) ach.unlocked = true;
+                if (m_stats.blackjacks >= 1) {
+                    ach.unlocked = true;
+                }
                 break;
             case AchievementId::ThousandBankroll:
                 if (!m_round.seats().empty() && m_round.seats()[0].bankroll >= 1000) {
@@ -582,16 +618,24 @@ void GameSession::checkAchievements() {
                 }
                 break;
             case AchievementId::FiveBlackjacksSession:
-                if (m_sessionBlackjacks >= 5) ach.unlocked = true;
+                if (m_sessionBlackjacks >= 5) {
+                    ach.unlocked = true;
+                }
                 break;
             case AchievementId::TenWinStreak:
-                if (m_stats.bestWinStreak >= 10) ach.unlocked = true;
+                if (m_stats.bestWinStreak >= 10) {
+                    ach.unlocked = true;
+                }
                 break;
             case AchievementId::HundredHands:
-                if (m_stats.handsPlayed >= 100) ach.unlocked = true;
+                if (m_stats.handsPlayed >= 100) {
+                    ach.unlocked = true;
+                }
                 break;
             case AchievementId::NeverBustSession:
-                if (m_stats.sessionsWithoutBust >= 20) ach.unlocked = true;
+                if (m_stats.sessionsWithoutBust >= 20) {
+                    ach.unlocked = true;
+                }
                 break;
         }
     }

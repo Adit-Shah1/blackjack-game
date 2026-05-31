@@ -270,7 +270,7 @@ void NetworkJoinScreen::handleEvent(const SDL_Event& event) {
     if (m_state == JoinState::EnterCode || m_state == JoinState::Error) {
         if (event.type == SDL_TEXTINPUT) {
             if (m_roomCodeInput.size() < 32) {
-                m_roomCodeInput += event.text.text;
+                m_roomCodeInput += event.text.text;  // NOLINT(cppcoreguidelines-pro-bounds-array-to-pointer-decay)
             }
             return;
         }

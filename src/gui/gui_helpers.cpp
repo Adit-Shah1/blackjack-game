@@ -140,9 +140,9 @@ void drawBitmap(SDL_Renderer* r, int x, int y, int scale,
                        const Color& color) {
     SDL_SetRenderDrawColor(r, color.r, color.g, color.b, color.a);
     for (int row = 0; row < rows; ++row) {
-        const char* line = bitmap[row];
+        const char* line = bitmap[row];  // NOLINT(cppcoreguidelines-pro-bounds-pointer-arithmetic)
         for (int col = 0; col < cols; ++col) {
-            if (line[col] == '#') {
+            if (line[col] == '#') {  // NOLINT(cppcoreguidelines-pro-bounds-pointer-arithmetic)
                 SDL_Rect pixel{ x + col * scale, y + row * scale, scale, scale };
                 SDL_RenderFillRect(r, &pixel);
             }
@@ -207,10 +207,10 @@ void drawSuitSymbol(SDL_Renderer* r, Suit suit, int cx, int cy, int scale, const
 
     const char* const* bitmap = nullptr;
     switch (suit) {
-        case Suit::Hearts:   bitmap = HEART;   break;
-        case Suit::Diamonds: bitmap = DIAMOND; break;
-        case Suit::Spades:   bitmap = SPADE;   break;
-        case Suit::Clubs:    bitmap = CLUB;    break;
+        case Suit::Hearts:   bitmap = HEART;   break;  // NOLINT(cppcoreguidelines-pro-bounds-array-to-pointer-decay)
+        case Suit::Diamonds: bitmap = DIAMOND; break;  // NOLINT(cppcoreguidelines-pro-bounds-array-to-pointer-decay)
+        case Suit::Spades:   bitmap = SPADE;   break;  // NOLINT(cppcoreguidelines-pro-bounds-array-to-pointer-decay)
+        case Suit::Clubs:    bitmap = CLUB;    break;  // NOLINT(cppcoreguidelines-pro-bounds-array-to-pointer-decay)
     }
     if (!bitmap) return;
 
