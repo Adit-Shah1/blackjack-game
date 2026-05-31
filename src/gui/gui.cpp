@@ -1294,7 +1294,7 @@ void GameTableScreen::onEnter() {
     m_aiTurnTimer = 0.0f;
     m_aiInsuranceResolved = false;
     m_passScreenActive = false;
-    m_lastActiveSeat = -1;
+    m_lastActiveSeat = m_app->localMPConfig().enabled ? 0 : -1;
     m_localMultiplayer = m_app->localMPConfig().enabled;
     m_app->localMPConfig().enabled = false; // Reset for next transition
 
@@ -1593,6 +1593,10 @@ void GameTableScreen::onBetPlus() {
     if (!m_round) return;
     int maxBet = m_round->rules().maxBet;
     int bankroll = m_round->seats()[0].bankroll;
+    if (m_localMultiplayer && m_currentBettingSeat >= 0 &&
+        m_currentBettingSeat < static_cast<int>(m_round->seats().size())) {
+        bankroll = m_round->seats()[m_currentBettingSeat].bankroll;
+    }
     m_currentBet = std::min(maxBet, std::min(bankroll, m_currentBet + 10));
     updateMessage();
 }
@@ -1802,7 +1806,7 @@ void GameTableScreen::onNextRound() {
     m_lastDealerCardCount = 0;
     m_outcomeTexts.clear();
     m_passScreenActive = false;
-    m_lastActiveSeat = -1;
+    m_lastActiveSeat = m_localMultiplayer ? 0 : -1;
     m_aiTurnTimer = 0.0f;
     m_aiInsuranceResolved = false;
     if (m_localMultiplayer) {
@@ -1861,8 +1865,14 @@ void GameTableScreen::getPlayerCardPosition(int handIndex, int cardIndex, int& o
     const int cw = 70;
     const int overlap = 20;
     int totalSeats = static_cast<int>(m_round->seats().size());
-    int centerX = getSeatCenterX(seatIndex, totalSeats);
-    int baseY = (seatIndex == 0) ? 380 : 520;
+    int centerX = m_localMultiplayer ? getLocalMPCenterX(seatIndex, totalSeats)
+                                     : getSeatCenterX(seatIndex, totalSeats);
+    int baseY;
+    if (m_localMultiplayer) {
+        baseY = 420;
+    } else {
+        baseY = (seatIndex == 0) ? 380 : 520;
+    }
 
     if (seatIndex < 0 || seatIndex >= totalSeats ||
         handIndex < 0 || handIndex >= static_cast<int>(m_round->seats()[seatIndex].hands.size())) {
@@ -2343,6 +2353,9 @@ void GameTableScreen::render(SDL_Renderer* renderer) {
         drawTextCentered(renderer, m_app->font(), m_subMessage, 640, 270, 200, 200, 200);
     }
 
+    if (m_passScreenActive) {
+        renderPassScreen(renderer);
+    }
     renderButtons(renderer, m_buttons);
     drawEscHint(renderer, m_app->font());
     renderScreenFlash(renderer);
