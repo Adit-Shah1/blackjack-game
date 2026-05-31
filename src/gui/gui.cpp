@@ -695,6 +695,14 @@ void ScreenManager::registerScreen(AppState state, std::unique_ptr<Screen> scree
     m_screens[state] = std::move(screen);
 }
 
+Screen* ScreenManager::getScreen(AppState state) {
+    auto it = m_screens.find(state);
+    if (it != m_screens.end()) {
+        return it->second.get();
+    }
+    return nullptr;
+}
+
 void ScreenManager::transitionTo(AppState state) {
     if (m_currentScreen) {
         m_currentScreen->onExit();
@@ -1010,10 +1018,168 @@ void MainMenuScreen::render(SDL_Renderer* renderer) {
 // ============================================================================
 
 LobbyScreen::LobbyScreen(Application* app)
-    : Screen(AppState::Lobby), m_app(app) {}
+    : Screen(AppState::Lobby), m_app(app) {
+    setupButtons();
+}
+
+void LobbyScreen::setupButtons() {
+    m_buttons.clear();
+    const int bw = 280;
+    const int bh = 50;
+    const int bx = (1280 - bw) / 2;
+    int by = 280;
+    const int gap = 16;
+
+    auto addBtn = [&](const std::string& label, std::function<void()> cb) {
+        m_buttons.push_back(std::make_unique<Button>(
+            bx, by, bw, bh, label, std::move(cb), m_app->font()));
+        m_buttons.back()->theme = &m_app->theme();
+        by += bh + gap;
+    };
+
+    switch (m_state) {
+        case LobbyState::ModeSelect: {
+            addBtn("Local Multiplayer", [this]() {
+                m_state = LobbyState::PlayerCount;
+                m_app->localMPConfig().enabled = true;
+                m_playerNames.clear();
+                setupButtons();
+            });
+            addBtn("Back", [this]() {
+                m_app->screenManager().transitionTo(AppState::MainMenu);
+            });
+            break;
+        }
+        case LobbyState::PlayerCount: {
+            addBtn("2 Players", [this]() {
+                m_selectedPlayerCount = 2;
+                m_currentNameEntry = 0;
+                m_playerNames.clear();
+                m_currentNameInput.clear();
+                m_state = LobbyState::NameEntry;
+                SDL_StartTextInput();
+                setupButtons();
+            });
+            addBtn("3 Players", [this]() {
+                m_selectedPlayerCount = 3;
+                m_currentNameEntry = 0;
+                m_playerNames.clear();
+                m_currentNameInput.clear();
+                m_state = LobbyState::NameEntry;
+                SDL_StartTextInput();
+                setupButtons();
+            });
+            addBtn("4 Players", [this]() {
+                m_selectedPlayerCount = 4;
+                m_currentNameEntry = 0;
+                m_playerNames.clear();
+                m_currentNameInput.clear();
+                m_state = LobbyState::NameEntry;
+                SDL_StartTextInput();
+                setupButtons();
+            });
+            addBtn("Back", [this]() {
+                resetToModeSelect();
+            });
+            break;
+        }
+        case LobbyState::NameEntry: {
+            // Only Next/Start button here; text input handled in handleEvent
+            std::string btnLabel = (m_currentNameEntry >= m_selectedPlayerCount - 1) ? "Start Game" : "Next";
+            addBtn(btnLabel, [this]() {
+                std::string name = m_currentNameInput.empty()
+                    ? ("Player " + std::to_string(m_currentNameEntry + 1))
+                    : m_currentNameInput;
+                m_playerNames.push_back(name);
+                m_currentNameInput.clear();
+                m_currentNameEntry++;
+                if (m_currentNameEntry >= m_selectedPlayerCount) {
+                    SDL_StopTextInput();
+                    m_state = LobbyState::Ready;
+                }
+                setupButtons();
+            });
+            addBtn("Back", [this]() {
+                if (m_currentNameEntry > 0) {
+                    m_currentNameEntry--;
+                    if (!m_playerNames.empty()) m_playerNames.pop_back();
+                    m_currentNameInput.clear();
+                } else {
+                    SDL_StopTextInput();
+                    resetToModeSelect();
+                }
+                setupButtons();
+            });
+            break;
+        }
+        case LobbyState::Ready: {
+            addBtn("Start Game", [this]() {
+                m_app->localMPConfig().playerCount = m_selectedPlayerCount;
+                m_app->localMPConfig().playerNames = m_playerNames;
+                m_app->localMPConfig().enabled = true;
+                m_app->screenManager().transitionTo(AppState::InRound);
+            });
+            addBtn("Back", [this]() {
+                m_state = LobbyState::PlayerCount;
+                m_currentNameEntry = 0;
+                m_playerNames.clear();
+                m_currentNameInput.clear();
+                setupButtons();
+            });
+            break;
+        }
+    }
+}
+
+void LobbyScreen::resetToModeSelect() {
+    m_state = LobbyState::ModeSelect;
+    m_selectedPlayerCount = 2;
+    m_currentNameEntry = 0;
+    m_playerNames.clear();
+    m_currentNameInput.clear();
+    m_app->localMPConfig().enabled = false;
+    SDL_StopTextInput();
+    setupButtons();
+}
+
+void LobbyScreen::onEnter() {
+    resetToModeSelect();
+    for (auto& btn : m_buttons) {
+        btn->resetState();
+    }
+}
 
 void LobbyScreen::handleEvent(const SDL_Event& event) {
-    if (handleEscToMenu(event, m_app)) return;
+    if (handleEscToMenu(event, m_app)) {
+        SDL_StopTextInput();
+        return;
+    }
+
+    if (m_state == LobbyState::NameEntry) {
+        if (event.type == SDL_TEXTINPUT) {
+            if (m_currentNameInput.size() < 16) {
+                m_currentNameInput += event.text.text;
+            }
+            return;
+        }
+        if (event.type == SDL_KEYDOWN) {
+            if (event.key.keysym.sym == SDLK_BACKSPACE && !m_currentNameInput.empty()) {
+                m_currentNameInput.pop_back();
+                return;
+            }
+            if (event.key.keysym.sym == SDLK_RETURN || event.key.keysym.sym == SDLK_KP_ENTER) {
+                // Trigger the Next/Start button
+                for (auto& btn : m_buttons) {
+                    if (btn->label == "Next" || btn->label == "Start Game") {
+                        if (btn->onClick) btn->onClick();
+                        return;
+                    }
+                }
+                return;
+            }
+        }
+    }
+
     if (routeButtons(event, m_buttons)) return;
 }
 
@@ -1023,7 +1189,49 @@ void LobbyScreen::render(SDL_Renderer* renderer) {
     SDL_SetRenderDrawColor(renderer, 40, 40, 50, 255);
     SDL_RenderClear(renderer);
 
-    drawScreenLabel(renderer, m_app->font(), "Multiplayer Lobby");
+    switch (m_state) {
+        case LobbyState::ModeSelect: {
+            drawScreenLabel(renderer, m_app->font(), "Multiplayer");
+            drawTextCentered(renderer, m_app->font(), "Choose game mode",
+                             640, 180, 200, 200, 200);
+            break;
+        }
+        case LobbyState::PlayerCount: {
+            drawScreenLabel(renderer, m_app->font(), "Player Count");
+            drawTextCentered(renderer, m_app->font(), "How many players?",
+                             640, 180, 200, 200, 200);
+            break;
+        }
+        case LobbyState::NameEntry: {
+            drawScreenLabel(renderer, m_app->font(), "Player Names");
+            std::string prompt = "Enter name for Player " + std::to_string(m_currentNameEntry + 1) +
+                                 " of " + std::to_string(m_selectedPlayerCount);
+            drawTextCentered(renderer, m_app->font(), prompt, 640, 180, 200, 200, 200);
+
+            // Draw text input box
+            fillRect(renderer, 440, 250, 400, 60, {60, 60, 70, 255});
+            drawRect(renderer, 440, 250, 400, 60, {200, 200, 200, 255});
+
+            std::string displayText = m_currentNameInput;
+            if ((SDL_GetTicks() / 500) % 2 == 0) displayText += "_";
+            if (displayText.empty()) displayText = "_";
+            drawTextCentered(renderer, m_app->font(), displayText, 640, 280, 255, 255, 255);
+            break;
+        }
+        case LobbyState::Ready: {
+            drawScreenLabel(renderer, m_app->font(), "Ready to Start");
+            int y = 180;
+            for (size_t i = 0; i < m_playerNames.size(); ++i) {
+                drawTextCentered(renderer, m_app->font(),
+                                 std::to_string(i + 1) + ". " + m_playerNames[i],
+                                 640, y, 255, 255, 255);
+                y += 40;
+            }
+            break;
+        }
+    }
+
+    renderButtons(renderer, m_buttons);
     drawEscHint(renderer, m_app->font());
 }
 
@@ -1062,8 +1270,14 @@ void GameTableScreen::onEnter() {
     if (!m_round) {
         RuleSet rules;
         m_round = std::make_unique<RoundState>(rules);
+    }
+
+    if (m_app->localMPConfig().enabled) {
+        setupLocalMultiplayer();
+    } else {
         setupAIOpponents();
     }
+
     m_round->startRound();
     m_currentBet = m_round->rules().minBet;
     m_lastPhase = RoundPhase::RoundComplete;
@@ -1077,9 +1291,24 @@ void GameTableScreen::onEnter() {
     m_screenFlash.active = false;
     m_lastDealerCardCount = 0;
     m_outcomeTexts.clear();
-    m_displayedBankroll = m_round->seats()[0].bankroll;
     m_aiTurnTimer = 0.0f;
     m_aiInsuranceResolved = false;
+    m_passScreenActive = false;
+    m_lastActiveSeat = -1;
+    m_localMultiplayer = m_app->localMPConfig().enabled;
+    m_app->localMPConfig().enabled = false; // Reset for next transition
+
+    if (m_localMultiplayer) {
+        m_currentBettingSeat = 0;
+        int seatCount = static_cast<int>(m_round->seats().size());
+        m_displayedBankrolls.resize(seatCount);
+        for (int i = 0; i < seatCount; ++i) {
+            m_displayedBankrolls[i] = m_round->seats()[i].bankroll;
+        }
+    } else {
+        m_displayedBankroll = m_round->seats()[0].bankroll;
+    }
+
     rebuildUI();
     updateMessage();
     m_app->audioManager().playAmbient("casino_ambient");
@@ -1104,6 +1333,100 @@ void GameTableScreen::setupAIOpponents() {
     }
 }
 
+void GameTableScreen::setupLocalMultiplayer() {
+    if (!m_round) return;
+    m_aiControllers.clear();
+    m_round->seats().clear();
+
+    const auto& config = m_app->localMPConfig();
+    int count = std::max(2, std::min(4, config.playerCount));
+    for (int i = 0; i < count; ++i) {
+        std::string name = (i < static_cast<int>(config.playerNames.size()) && !config.playerNames[i].empty())
+            ? config.playerNames[i]
+            : "Player " + std::to_string(i + 1);
+        m_round->addSeat(name, m_round->rules().startingBankroll);
+    }
+
+    m_localMultiplayer = true;
+    m_currentBettingSeat = 0;
+    m_passScreenActive = false;
+    m_lastActiveSeat = -1;
+    int seatCount = static_cast<int>(m_round->seats().size());
+    m_displayedBankrolls.resize(seatCount);
+    for (int i = 0; i < seatCount; ++i) {
+        m_displayedBankrolls[i] = m_round->seats()[i].bankroll;
+    }
+}
+
+int GameTableScreen::getLocalMPCenterX(int seatIndex, int totalSeats) const {
+    if (totalSeats <= 1) return 640;
+    int spacing = 1280 / (totalSeats + 1);
+    return spacing * (seatIndex + 1);
+}
+
+void GameTableScreen::updateAllBankrollTickers(float deltaTime) {
+    if (!m_round) return;
+    int seatCount = static_cast<int>(m_round->seats().size());
+    if (static_cast<int>(m_displayedBankrolls.size()) != seatCount) {
+        m_displayedBankrolls.resize(seatCount);
+        for (int i = 0; i < seatCount; ++i) {
+            m_displayedBankrolls[i] = m_round->seats()[i].bankroll;
+        }
+    }
+    for (int i = 0; i < seatCount; ++i) {
+        int actual = m_round->seats()[i].bankroll;
+        if (m_displayedBankrolls[i] != actual) {
+            int diff = actual - m_displayedBankrolls[i];
+            float speed = 800.0f * deltaTime;
+            if (std::abs(diff) <= static_cast<int>(speed)) {
+                m_displayedBankrolls[i] = actual;
+            } else {
+                m_displayedBankrolls[i] += (diff > 0 ? static_cast<int>(speed) : -static_cast<int>(speed));
+            }
+        }
+    }
+}
+
+void GameTableScreen::onPlaceBet() {
+    if (!m_round) return;
+    int seat = m_currentBettingSeat;
+    if (seat < 0 || seat >= static_cast<int>(m_round->seats().size())) return;
+
+    m_round->placeBet(seat, m_currentBet);
+    m_currentBettingSeat++;
+    m_currentBet = m_round->rules().minBet;
+
+    if (m_round->allSeatsHaveBets()) {
+        m_round->advancePhase();
+        animateInitialDealAllSeats();
+        m_app->audioManager().playSFX("shuffle");
+    }
+
+    m_needsUIRebuild = true;
+    updateMessage();
+}
+
+void GameTableScreen::onPassReady() {
+    m_passScreenActive = false;
+    m_needsUIRebuild = true;
+    updateMessage();
+}
+
+void GameTableScreen::renderPassScreen(SDL_Renderer* r) {
+    // Semi-transparent dark overlay
+    fillRect(r, 0, 0, 1280, 720, {20, 20, 30, 255});
+
+    if (!m_round) return;
+    int seatIdx = m_round->currentSeatIndex();
+    if (seatIdx < 0 || seatIdx >= static_cast<int>(m_round->seats().size())) return;
+
+    const auto& seat = m_round->seats()[seatIdx];
+    drawTextCentered(r, m_app->font(), "Pass the device", 640, 240, 255, 255, 255);
+    drawTextCentered(r, m_app->font(), seat.name + "'s Turn", 640, 300, 255, 215, 0);
+    drawTextCentered(r, m_app->font(), "Don't look at the screen until it's your turn!",
+                     640, 360, 200, 200, 200);
+}
+
 void GameTableScreen::onExit() {
     m_app->audioManager().stopAmbient();
 }
@@ -1119,11 +1442,21 @@ void GameTableScreen::rebuildUI() {
         m_buttons.back()->theme = &m_app->theme();
     };
 
+    // Pass screen takes over all UI during local MP seat transitions
+    if (m_passScreenActive) {
+        addBtn("Ready", 565, 460, 150, 50, [this]() { onPassReady(); });
+        return;
+    }
+
     switch (m_round->phase()) {
         case RoundPhase::WaitingForBets: {
             addBtn("-", 540, 400, 60, 40, [this]() { onBetMinus(); });
             addBtn("+", 680, 400, 60, 40, [this]() { onBetPlus(); });
-            addBtn("Deal", 565, 460, 150, 50, [this]() { onDeal(); });
+            if (m_localMultiplayer) {
+                addBtn("Place Bet", 540, 460, 200, 50, [this]() { onPlaceBet(); });
+            } else {
+                addBtn("Deal", 565, 460, 150, 50, [this]() { onDeal(); });
+            }
             break;
         }
         case RoundPhase::InsuranceOffer: {
@@ -1132,7 +1465,9 @@ void GameTableScreen::rebuildUI() {
             break;
         }
         case RoundPhase::PlayerTurns: {
-            auto actions = m_round->getLegalActions(0, m_round->currentHandIndex());
+            int seatIdx = m_round->currentSeatIndex();
+            int handIdx = m_round->currentHandIndex();
+            auto actions = m_round->getLegalActions(seatIdx, handIdx);
             int bx = 340;
             const int bw = 100;
             const int bh = 40;
@@ -1175,10 +1510,19 @@ void GameTableScreen::updateMessage() {
     }
 
     switch (m_round->phase()) {
-        case RoundPhase::WaitingForBets:
-            m_message = "Place your bet";
+        case RoundPhase::WaitingForBets: {
+            if (m_localMultiplayer) {
+                if (m_currentBettingSeat >= 0 && m_currentBettingSeat < static_cast<int>(m_round->seats().size())) {
+                    m_message = m_round->seats()[m_currentBettingSeat].name + ", place your bet";
+                } else {
+                    m_message = "Place your bets";
+                }
+            } else {
+                m_message = "Place your bet";
+            }
             m_subMessage = "Bet: $" + std::to_string(m_currentBet);
             break;
+        }
         case RoundPhase::InitialDeal:
             m_message = "Dealing...";
             m_subMessage.clear();
@@ -1194,11 +1538,12 @@ void GameTableScreen::updateMessage() {
                 handIdx >= 0 && handIdx < static_cast<int>(m_round->seats()[currentSeat].hands.size())) {
                 const auto& seat = m_round->seats()[currentSeat];
                 const auto& hand = seat.hands[handIdx];
-                if (currentSeat == 0) {
+                if (!m_localMultiplayer && currentSeat == 0) {
                     m_message = "Your turn — Hand " + std::to_string(handIdx + 1) + " of " +
                                std::to_string(seat.hands.size());
                 } else {
-                    m_message = seat.name + " is playing...";
+                    m_message = seat.name + "'s turn — Hand " + std::to_string(handIdx + 1) +
+                               " of " + std::to_string(seat.hands.size());
                 }
                 m_subMessage = "Total: " + std::to_string(hand.hand.bestValue());
                 if (hand.hand.isSoft()) {
@@ -1225,10 +1570,12 @@ void GameTableScreen::updateMessage() {
         case RoundPhase::RoundComplete: {
             m_message = "Round Complete";
             m_subMessage.clear();
-            const auto& seat = m_round->seats()[0];
-            for (size_t i = 0; i < seat.hands.size(); ++i) {
-                if (!m_subMessage.empty()) m_subMessage += "  |  ";
-                m_subMessage += "Hand " + std::to_string(i + 1) + ": " + toString(seat.hands[i].outcome);
+            if (!m_localMultiplayer) {
+                const auto& seat = m_round->seats()[0];
+                for (size_t i = 0; i < seat.hands.size(); ++i) {
+                    if (!m_subMessage.empty()) m_subMessage += "  |  ";
+                    m_subMessage += "Hand " + std::to_string(i + 1) + ": " + toString(seat.hands[i].outcome);
+                }
             }
             break;
         }
@@ -1315,20 +1662,21 @@ void GameTableScreen::animateInitialDealAllSeats() {
 
 void GameTableScreen::onHit() {
     if (!m_round) return;
+    int seatIdx = m_round->currentSeatIndex();
     int handIdx = m_round->currentHandIndex();
-    if (handIdx < 0) return;
-    int prevCount = m_round->seats()[0].hands[handIdx].hand.cardCount();
-    m_round->hit(0, handIdx);
-    int newCount = m_round->seats()[0].hands[handIdx].hand.cardCount();
+    if (handIdx < 0 || seatIdx < 0) return;
+    int prevCount = m_round->seats()[seatIdx].hands[handIdx].hand.cardCount();
+    m_round->hit(seatIdx, handIdx);
+    int newCount = m_round->seats()[seatIdx].hands[handIdx].hand.cardCount();
     if (newCount > prevCount) {
         int tx, ty;
-        getPlayerCardPosition(handIdx, newCount - 1, tx, ty, 0);
-        spawnCardFly(m_round->seats()[0].hands[handIdx].hand.cards().back(),
+        getPlayerCardPosition(handIdx, newCount - 1, tx, ty, seatIdx);
+        spawnCardFly(m_round->seats()[seatIdx].hands[handIdx].hand.cards().back(),
                      640.0f - 35.0f, 360.0f - 49.0f,
-                     static_cast<float>(tx), static_cast<float>(ty), true, 0.0f, 0, handIdx, newCount - 1);
+                     static_cast<float>(tx), static_cast<float>(ty), true, 0.0f, seatIdx, handIdx, newCount - 1);
         m_app->audioManager().playSFX("card_deal");
     }
-    if (m_round->seats()[0].hands[handIdx].finished) {
+    if (m_round->seats()[seatIdx].hands[handIdx].finished) {
         m_round->nextHand();
     }
     m_round->advancePhase();
@@ -1337,9 +1685,10 @@ void GameTableScreen::onHit() {
 
 void GameTableScreen::onStand() {
     if (!m_round) return;
+    int seatIdx = m_round->currentSeatIndex();
     int handIdx = m_round->currentHandIndex();
-    if (handIdx < 0) return;
-    m_round->stand(0, handIdx);
+    if (handIdx < 0 || seatIdx < 0) return;
+    m_round->stand(seatIdx, handIdx);
     m_app->audioManager().playSFX("stand_click");
     m_round->nextHand();
     m_round->advancePhase();
@@ -1348,17 +1697,18 @@ void GameTableScreen::onStand() {
 
 void GameTableScreen::onDouble() {
     if (!m_round) return;
+    int seatIdx = m_round->currentSeatIndex();
     int handIdx = m_round->currentHandIndex();
-    if (handIdx < 0) return;
-    int prevCount = m_round->seats()[0].hands[handIdx].hand.cardCount();
-    m_round->doubleDown(0, handIdx);
-    int newCount = m_round->seats()[0].hands[handIdx].hand.cardCount();
+    if (handIdx < 0 || seatIdx < 0) return;
+    int prevCount = m_round->seats()[seatIdx].hands[handIdx].hand.cardCount();
+    m_round->doubleDown(seatIdx, handIdx);
+    int newCount = m_round->seats()[seatIdx].hands[handIdx].hand.cardCount();
     if (newCount > prevCount) {
         int tx, ty;
-        getPlayerCardPosition(handIdx, newCount - 1, tx, ty, 0);
-        spawnCardFly(m_round->seats()[0].hands[handIdx].hand.cards().back(),
+        getPlayerCardPosition(handIdx, newCount - 1, tx, ty, seatIdx);
+        spawnCardFly(m_round->seats()[seatIdx].hands[handIdx].hand.cards().back(),
                      640.0f - 35.0f, 360.0f - 49.0f,
-                     static_cast<float>(tx), static_cast<float>(ty), true, 0.0f, 0, handIdx, newCount - 1);
+                     static_cast<float>(tx), static_cast<float>(ty), true, 0.0f, seatIdx, handIdx, newCount - 1);
         m_app->audioManager().playSFX("card_deal");
     }
     m_app->audioManager().playSFX("chip_stack");
@@ -1369,27 +1719,28 @@ void GameTableScreen::onDouble() {
 
 void GameTableScreen::onSplit() {
     if (!m_round) return;
+    int seatIdx = m_round->currentSeatIndex();
     int handIdx = m_round->currentHandIndex();
-    if (handIdx < 0) return;
-    m_round->split(0, handIdx);
+    if (handIdx < 0 || seatIdx < 0) return;
+    m_round->split(seatIdx, handIdx);
 
     // Animate new cards dealt to both split hands
-    const auto& hands = m_round->seats()[0].hands;
+    const auto& hands = m_round->seats()[seatIdx].hands;
     for (size_t h = handIdx; h < hands.size() && h <= static_cast<size_t>(handIdx) + 1; ++h) {
         int cardCount = hands[h].hand.cardCount();
         if (cardCount >= 2) {
             int tx, ty;
-            getPlayerCardPosition(static_cast<int>(h), cardCount - 1, tx, ty, 0);
+            getPlayerCardPosition(static_cast<int>(h), cardCount - 1, tx, ty, seatIdx);
             spawnCardFly(hands[h].hand.cards().back(),
                          640.0f - 35.0f, 360.0f - 49.0f,
                          static_cast<float>(tx), static_cast<float>(ty), true,
-                         static_cast<float>(h - handIdx) * 0.05f, 0, static_cast<int>(h), cardCount - 1);
+                         static_cast<float>(h - handIdx) * 0.05f, seatIdx, static_cast<int>(h), cardCount - 1);
         }
     }
     m_app->audioManager().playSFX("card_deal");
     m_app->audioManager().playSFX("chip_stack");
 
-    const auto& hand = m_round->seats()[0].hands[handIdx];
+    const auto& hand = m_round->seats()[seatIdx].hands[handIdx];
     if (hand.finished) {
         m_round->nextHand();
     }
@@ -1399,9 +1750,10 @@ void GameTableScreen::onSplit() {
 
 void GameTableScreen::onSurrender() {
     if (!m_round) return;
+    int seatIdx = m_round->currentSeatIndex();
     int handIdx = m_round->currentHandIndex();
-    if (handIdx < 0) return;
-    m_round->surrender(0, handIdx);
+    if (handIdx < 0 || seatIdx < 0) return;
+    m_round->surrender(seatIdx, handIdx);
     m_app->audioManager().playSFX("surrender");
     m_round->nextHand();
     m_round->advancePhase();
@@ -1410,6 +1762,19 @@ void GameTableScreen::onSurrender() {
 
 void GameTableScreen::onInsuranceYes() {
     if (!m_round) return;
+    if (m_localMultiplayer) {
+        // In local MP, auto-insure all seats to keep the game flowing
+        for (size_t i = 0; i < m_round->seats().size(); ++i) {
+            int maxInsurance = m_round->seats()[i].hands[0].bet.mainBet / 2;
+            if (maxInsurance > 0 && maxInsurance <= m_round->seats()[i].bankroll) {
+                m_round->takeInsurance(static_cast<int>(i), maxInsurance);
+            }
+        }
+        m_app->audioManager().playSFX("chip_stack");
+        m_round->advancePhase();
+        m_needsUIRebuild = true;
+        return;
+    }
     int maxInsurance = m_round->seats()[0].hands[0].bet.mainBet / 2;
     m_round->takeInsurance(0, maxInsurance);
     m_app->audioManager().playSFX("chip_stack");
@@ -1436,7 +1801,20 @@ void GameTableScreen::onNextRound() {
     m_screenFlash.active = false;
     m_lastDealerCardCount = 0;
     m_outcomeTexts.clear();
-    m_displayedBankroll = m_round->seats()[0].bankroll;
+    m_passScreenActive = false;
+    m_lastActiveSeat = -1;
+    m_aiTurnTimer = 0.0f;
+    m_aiInsuranceResolved = false;
+    if (m_localMultiplayer) {
+        m_currentBettingSeat = 0;
+        int seatCount = static_cast<int>(m_round->seats().size());
+        m_displayedBankrolls.resize(seatCount);
+        for (int i = 0; i < seatCount; ++i) {
+            m_displayedBankrolls[i] = m_round->seats()[i].bankroll;
+        }
+    } else {
+        m_displayedBankroll = m_round->seats()[0].bankroll;
+    }
     m_needsUIRebuild = true;
     rebuildUI();
     updateMessage();
@@ -1581,12 +1959,20 @@ void GameTableScreen::playOutcomeAudio() {
 
 void GameTableScreen::handleEvent(const SDL_Event& event) {
     if (handleEscToMenu(event, m_app)) return;
+
+    if (m_passScreenActive) {
+        if (routeButtons(event, m_buttons)) return;
+        return;
+    }
+
     if (routeButtons(event, m_buttons)) return;
 
     if (event.type == SDL_KEYDOWN && m_round) {
         switch (m_round->phase()) {
             case RoundPhase::PlayerTurns: {
-                auto actions = m_round->getLegalActions(0, m_round->currentHandIndex());
+                int seatIdx = m_round->currentSeatIndex();
+                int handIdx = m_round->currentHandIndex();
+                auto actions = m_round->getLegalActions(seatIdx, handIdx);
                 switch (event.key.keysym.sym) {
                     case SDLK_h: if (actions.canHit) onHit(); break;
                     case SDLK_s: if (actions.canStand) onStand(); break;
@@ -1598,7 +1984,11 @@ void GameTableScreen::handleEvent(const SDL_Event& event) {
             }
             case RoundPhase::WaitingForBets:
                 if (event.key.keysym.sym == SDLK_RETURN || event.key.keysym.sym == SDLK_SPACE) {
-                    onDeal();
+                    if (m_localMultiplayer) {
+                        onPlaceBet();
+                    } else {
+                        onDeal();
+                    }
                 } else if (event.key.keysym.sym == SDLK_LEFT || event.key.keysym.sym == SDLK_DOWN) {
                     onBetMinus();
                 } else if (event.key.keysym.sym == SDLK_RIGHT || event.key.keysym.sym == SDLK_UP) {
@@ -1624,8 +2014,32 @@ void GameTableScreen::update(float deltaTime) {
     if (!m_round) return;
 
     updateAnimations(deltaTime);
+    updateOutcomeTexts(deltaTime);
+
+    if (m_localMultiplayer) {
+        updateAllBankrollTickers(deltaTime);
+    } else {
+        updateBankrollTicker(deltaTime);
+    }
 
     RoundPhase currentPhase = m_round->phase();
+
+    // Pass screen handling for local multiplayer
+    if (m_localMultiplayer && currentPhase == RoundPhase::PlayerTurns) {
+        int currentSeat = m_round->currentSeatIndex();
+        if (currentSeat >= 0 && currentSeat != m_lastActiveSeat && m_lastActiveSeat >= 0) {
+            m_passScreenActive = true;
+            m_lastActiveSeat = currentSeat;
+            m_needsUIRebuild = true;
+        }
+        if (m_passScreenActive) {
+            if (m_needsUIRebuild) {
+                m_needsUIRebuild = false;
+                rebuildUI();
+            }
+            return; // Block gameplay while pass screen is active
+        }
+    }
 
     if (currentPhase != m_lastPhase || m_needsUIRebuild) {
         RoundPhase prevPhase = m_lastPhase;
@@ -1644,49 +2058,51 @@ void GameTableScreen::update(float deltaTime) {
         }
         if (currentPhase == RoundPhase::RoundComplete && prevPhase != RoundPhase::RoundComplete) {
             // Trigger visual effects based on outcomes
-            const auto& seat = m_round->seats()[0];
-            bool hasBlackjack = false;
-            bool hasWin = false;
-            bool hasBust = false;
-            bool hasLose = false;
-            for (const auto& hand : seat.hands) {
-                switch (hand.outcome) {
-                    case HandOutcome::Blackjack: hasBlackjack = true; break;
-                    case HandOutcome::Win: hasWin = true; break;
-                    case HandOutcome::Bust: hasBust = true; break;
-                    case HandOutcome::Lose: hasLose = true; break;
-                    default: break;
+            for (size_t s = 0; s < m_round->seats().size(); ++s) {
+                const auto& seat = m_round->seats()[s];
+                bool hasBlackjack = false;
+                bool hasWin = false;
+                bool hasBust = false;
+                bool hasLose = false;
+                for (const auto& hand : seat.hands) {
+                    switch (hand.outcome) {
+                        case HandOutcome::Blackjack: hasBlackjack = true; break;
+                        case HandOutcome::Win: hasWin = true; break;
+                        case HandOutcome::Bust: hasBust = true; break;
+                        case HandOutcome::Lose: hasLose = true; break;
+                        default: break;
+                    }
                 }
-            }
-            if (hasBlackjack) {
-                spawnScreenFlash({255, 215, 0, 120}, 1.0f);
-            } else if (hasWin) {
-                spawnScreenFlash({255, 215, 0, 80}, 0.5f);
-            } else if (hasBust) {
-                spawnScreenFlash({212, 0, 0, 80}, 0.5f);
-            } else if (hasLose) {
-                spawnScreenFlash({212, 0, 0, 40}, 0.3f);
-            }
+                if (hasBlackjack) {
+                    spawnScreenFlash({255, 215, 0, 120}, 1.0f);
+                } else if (hasWin) {
+                    spawnScreenFlash({255, 215, 0, 80}, 0.5f);
+                } else if (hasBust) {
+                    spawnScreenFlash({212, 0, 0, 80}, 0.5f);
+                } else if (hasLose) {
+                    spawnScreenFlash({212, 0, 0, 40}, 0.3f);
+                }
 
-            // Outcome text pop-in
-            for (size_t i = 0; i < seat.hands.size(); ++i) {
-                const auto& hand = seat.hands[i];
-                std::string text;
-                Color color{255, 255, 255, 255};
-                switch (hand.outcome) {
-                    case HandOutcome::Blackjack: text = "BLACKJACK!"; color = {255, 215, 0, 255}; break;
-                    case HandOutcome::Win: text = "WIN!"; color = {0, 255, 100, 255}; break;
-                    case HandOutcome::Push: text = "PUSH"; color = {180, 180, 180, 255}; break;
-                    case HandOutcome::Bust: text = "BUST!"; color = {212, 0, 0, 255}; break;
-                    case HandOutcome::Lose: text = "LOSE"; color = {212, 0, 0, 255}; break;
-                    case HandOutcome::Surrender: text = "SURRENDER"; color = {180, 140, 80, 255}; break;
-                    default: break;
-                }
-                if (!text.empty()) {
-                    int tx = 0, ty = 0;
-                    getPlayerCardPosition(static_cast<int>(i), 0, tx, ty, 0);
-                    ty -= 30;
-                    spawnOutcomeText(text, static_cast<float>(tx) + 35.0f, static_cast<float>(ty), color);
+                // Outcome text pop-in for all seats
+                for (size_t i = 0; i < seat.hands.size(); ++i) {
+                    const auto& hand = seat.hands[i];
+                    std::string text;
+                    Color color{255, 255, 255, 255};
+                    switch (hand.outcome) {
+                        case HandOutcome::Blackjack: text = "BLACKJACK!"; color = {255, 215, 0, 255}; break;
+                        case HandOutcome::Win: text = "WIN!"; color = {0, 255, 100, 255}; break;
+                        case HandOutcome::Push: text = "PUSH"; color = {180, 180, 180, 255}; break;
+                        case HandOutcome::Bust: text = "BUST!"; color = {212, 0, 0, 255}; break;
+                        case HandOutcome::Lose: text = "LOSE"; color = {212, 0, 0, 255}; break;
+                        case HandOutcome::Surrender: text = "SURRENDER"; color = {180, 140, 80, 255}; break;
+                        default: break;
+                    }
+                    if (!text.empty()) {
+                        int tx, ty;
+                        getPlayerCardPosition(static_cast<int>(i), 0, tx, ty, static_cast<int>(s));
+                        ty -= 30;
+                        spawnOutcomeText(text, static_cast<float>(tx) + 35.0f, static_cast<float>(ty), color);
+                    }
                 }
             }
         }
@@ -1699,9 +2115,9 @@ void GameTableScreen::update(float deltaTime) {
             for (int i = m_lastDealerCardCount; i < dealerCardCount; ++i) {
                 int tx, ty;
                 getDealerCardPosition(i, tx, ty);
-            spawnCardFly(m_round->dealer().hand.cards()[i],
-                         640.0f - 35.0f, 360.0f - 49.0f,
-                         static_cast<float>(tx), static_cast<float>(ty), true, 0.0f, -1, -1, i);
+                spawnCardFly(m_round->dealer().hand.cards()[i],
+                             640.0f - 35.0f, 360.0f - 49.0f,
+                             static_cast<float>(tx), static_cast<float>(ty), true, 0.0f, -1, -1, i);
                 m_app->audioManager().playSFX("card_deal");
             }
         }
@@ -1710,22 +2126,16 @@ void GameTableScreen::update(float deltaTime) {
         }
     }
 
-    updateOutcomeTexts(deltaTime);
-    updateBankrollTicker(deltaTime);
-
     // AI insurance resolution during InsuranceOffer phase
-    if (currentPhase == RoundPhase::InsuranceOffer && !m_aiInsuranceResolved) {
+    if (currentPhase == RoundPhase::InsuranceOffer && !m_aiInsuranceResolved && !m_localMultiplayer) {
         m_aiInsuranceResolved = true;
         resolveAllAIInsurance();
-        // After AI resolves, auto-advance if human hasn't decided yet
-        // (the UI will still show Yes/No buttons for the human)
     }
 
-    // AI turn execution during PlayerTurns phase
-    if (currentPhase == RoundPhase::PlayerTurns) {
+    // AI turn execution during PlayerTurns phase (only in single player)
+    if (currentPhase == RoundPhase::PlayerTurns && !m_localMultiplayer) {
         int currentSeat = m_round->currentSeatIndex();
         if (currentSeat > 0 && currentSeat < static_cast<int>(m_round->seats().size())) {
-            // It's an AI's turn
             m_aiTurnTimer += deltaTime;
             if (m_aiTurnTimer >= m_aiTurnDelay) {
                 m_aiTurnTimer = 0.0f;
@@ -1739,11 +2149,13 @@ void GameTableScreen::update(float deltaTime) {
 
     switch (currentPhase) {
         case RoundPhase::PlayerTurns: {
+            int seatIdx = m_round->currentSeatIndex();
             int handIdx = m_round->currentHandIndex();
-            if (handIdx >= 0 && handIdx < static_cast<int>(m_round->seats()[0].hands.size())) {
-                const auto& hand = m_round->seats()[0].hands[handIdx];
+            if (handIdx >= 0 && seatIdx >= 0 &&
+                handIdx < static_cast<int>(m_round->seats()[seatIdx].hands.size())) {
+                const auto& hand = m_round->seats()[seatIdx].hands[handIdx];
                 if (hand.hand.isBlackjack()) {
-                    m_round->stand(0, handIdx);
+                    m_round->stand(seatIdx, handIdx);
                     m_round->nextHand();
                     m_round->advancePhase();
                 }
@@ -1866,6 +2278,10 @@ void GameTableScreen::renderDealer(SDL_Renderer* r) {
 
 void GameTableScreen::renderStatus(SDL_Renderer* r) {
     if (!m_round) return;
+    if (m_localMultiplayer) {
+        // Each seat shows its own bankroll via renderPlayerSeat
+        return;
+    }
     std::string bankroll = "Bankroll: $" + std::to_string(m_displayedBankroll);
     drawText(r, m_app->font(), bankroll, 1050, 20, 255, 255, 255);
 }
@@ -2003,6 +2419,25 @@ void GameTableScreen::renderOutcomeTexts(SDL_Renderer* r) {
 void GameTableScreen::renderBetChips(SDL_Renderer* r) {
     if (!m_round) return;
 
+    if (m_localMultiplayer) {
+        // Render chips for each seat at their position
+        int totalSeats = static_cast<int>(m_round->seats().size());
+        for (int s = 0; s < totalSeats; ++s) {
+            int bet = 0;
+            if (m_round->phase() == RoundPhase::WaitingForBets && s == m_currentBettingSeat) {
+                bet = m_currentBet;
+            } else if (m_round->phase() != RoundPhase::RoundComplete && !m_round->seats()[s].hands.empty()) {
+                bet = m_round->seats()[s].hands[0].bet.mainBet;
+            }
+            if (bet <= 0) continue;
+
+            int cx = getLocalMPCenterX(s, totalSeats);
+            int cy = 390;
+            renderChipStack(r, cx, cy, bet);
+        }
+        return;
+    }
+
     int bet = 0;
     if (m_round->phase() == RoundPhase::WaitingForBets) {
         bet = m_currentBet;
@@ -2013,6 +2448,15 @@ void GameTableScreen::renderBetChips(SDL_Renderer* r) {
 
     int cx = 640;
     int cy = 330;
+    renderChipStack(r, cx, cy, bet);
+
+    std::string betText = "$" + std::to_string(
+        (m_round->phase() == RoundPhase::WaitingForBets) ? m_currentBet : m_round->seats()[0].hands[0].bet.mainBet);
+    drawTextCentered(r, m_app->font(), betText, cx, cy + 18, 255, 255, 255);
+}
+
+void GameTableScreen::renderChipStack(SDL_Renderer* r, int cx, int cy, int bet) {
+    int originalBet = bet;
     const int chipW = 28;
     const int chipH = 18;
 
@@ -2042,8 +2486,7 @@ void GameTableScreen::renderBetChips(SDL_Renderer* r) {
         if (count > 0) stackY -= 8;
     }
 
-    std::string betText = "$" + std::to_string(
-        (m_round->phase() == RoundPhase::WaitingForBets) ? m_currentBet : m_round->seats()[0].hands[0].bet.mainBet);
+    std::string betText = "$" + std::to_string(originalBet);
     drawTextCentered(r, m_app->font(), betText, cx, cy + 18, 255, 255, 255);
 }
 
@@ -2168,11 +2611,20 @@ void GameTableScreen::renderAllPlayers(SDL_Renderer* r) {
     int totalSeats = static_cast<int>(m_round->seats().size());
     if (totalSeats == 0) return;
 
-    for (int s = 0; s < totalSeats; ++s) {
-        int cx = getSeatCenterX(s, totalSeats);
-        int baseY = (s == 0) ? 380 : 520;  // Human at bottom, AI above
-        bool isHuman = (s == 0);
-        renderPlayerSeat(r, s, cx, baseY, isHuman);
+    if (m_localMultiplayer) {
+        // All seats are human, distributed evenly across the bottom
+        for (int s = 0; s < totalSeats; ++s) {
+            int cx = getLocalMPCenterX(s, totalSeats);
+            int baseY = 420;
+            renderPlayerSeat(r, s, cx, baseY, true);
+        }
+    } else {
+        for (int s = 0; s < totalSeats; ++s) {
+            int cx = getSeatCenterX(s, totalSeats);
+            int baseY = (s == 0) ? 380 : 520;  // Human at bottom, AI above
+            bool isHuman = (s == 0);
+            renderPlayerSeat(r, s, cx, baseY, isHuman);
+        }
     }
 }
 

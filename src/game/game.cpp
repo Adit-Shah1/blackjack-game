@@ -304,7 +304,7 @@ void RoundState::dealInitialCards() {
 void RoundState::advancePhase() {
     switch (m_phase) {
         case RoundPhase::WaitingForBets:
-            if (!m_seats[0].hands.empty()) {
+            if (allSeatsHaveBets()) {
                 m_phase = RoundPhase::InitialDeal;
                 dealInitialCards();
             }
@@ -342,6 +342,10 @@ void RoundState::advancePhase() {
                 revealDealerHoleCard();
                 dealerPlay();
             } else if (m_currentHandIndex < 0 || m_currentSeatIndex < 0) {
+                findNextActiveHand();
+            } else if (m_currentHandIndex >= 0 && m_currentSeatIndex >= 0 &&
+                       m_currentHandIndex < static_cast<int>(m_seats[m_currentSeatIndex].hands.size()) &&
+                       m_seats[m_currentSeatIndex].hands[m_currentHandIndex].finished) {
                 findNextActiveHand();
             }
             break;

@@ -24,6 +24,15 @@ class AudioManager;
 class Application;
 
 // ---------------------------------------------------------------------------
+// Local Multiplayer Configuration
+// ---------------------------------------------------------------------------
+struct LocalMultiplayerConfig {
+    bool enabled = false;
+    int playerCount = 1;
+    std::vector<std::string> playerNames;
+};
+
+// ---------------------------------------------------------------------------
 // AppState
 // ---------------------------------------------------------------------------
 enum class AppState {
@@ -320,6 +329,7 @@ public:
     void registerScreen(AppState state, std::unique_ptr<Screen> screen);
     void transitionTo(AppState state);
     AppState currentState() const { return m_currentState; }
+    Screen* getScreen(AppState state);
 
     void handleEvent(const SDL_Event& event);
     void update(float deltaTime);
@@ -351,6 +361,7 @@ public:
     FontManager& fontManager() { return m_fontManager; }
     AudioManager& audioManager() { return *m_audioManager; }
     const Theme& theme() const { return m_theme; }
+    LocalMultiplayerConfig& localMPConfig() { return m_localMPConfig; }
 
     // Render text centered at (x, y). If font is missing, this is a no-op.
     void renderText(const std::string& text, int x, int y,
@@ -372,6 +383,7 @@ private:
     Theme m_theme;
 
     ScreenManager m_screenManager;
+    LocalMultiplayerConfig m_localMPConfig;
 
     bool loadFont();
 
@@ -404,6 +416,7 @@ class LobbyScreen : public Screen {
 public:
     explicit LobbyScreen(Application* app);
 
+    void onEnter() override;
     void handleEvent(const SDL_Event& event) override;
     void update(float deltaTime) override;
     void render(SDL_Renderer* renderer) override;
@@ -411,6 +424,16 @@ public:
 private:
     Application* m_app;
     std::vector<std::unique_ptr<Button>> m_buttons;
+
+    enum class LobbyState { ModeSelect, PlayerCount, NameEntry, Ready };
+    LobbyState m_state = LobbyState::ModeSelect;
+    int m_selectedPlayerCount = 2;
+    int m_currentNameEntry = 0;
+    std::vector<std::string> m_playerNames;
+    std::string m_currentNameInput;
+
+    void setupButtons();
+    void resetToModeSelect();
 };
 
 class SettingsScreen : public Screen {
@@ -522,6 +545,13 @@ private:
     float m_aiTurnDelay = 0.6f;
     bool m_aiInsuranceResolved = false;
 
+    // Local multiplayer
+    bool m_localMultiplayer = false;
+    int m_currentBettingSeat = 0;
+    bool m_passScreenActive = false;
+    int m_lastActiveSeat = -1;
+    std::vector<int> m_displayedBankrolls;
+
     // Bankroll ticker animation
     int m_displayedBankroll = 0;
 
@@ -542,6 +572,7 @@ private:
     void updateOutcomeTexts(float deltaTime);
     void renderOutcomeTexts(SDL_Renderer* r);
     void renderBetChips(SDL_Renderer* r);
+    void renderChipStack(SDL_Renderer* r, int cx, int cy, int bet);
     void updateBankrollTicker(float deltaTime);
 
     // Multi-seat rendering
@@ -554,6 +585,14 @@ private:
     void resolveAllAIInsurance();
     void setupAIOpponents();
     void animateInitialDealAllSeats();
+
+    // Local multiplayer helpers
+    void setupLocalMultiplayer();
+    void onPlaceBet();
+    void onPassReady();
+    void renderPassScreen(SDL_Renderer* r);
+    int getLocalMPCenterX(int seatIndex, int totalSeats) const;
+    void updateAllBankrollTickers(float deltaTime);
 };
 
 class RoundResultsScreen : public Screen {

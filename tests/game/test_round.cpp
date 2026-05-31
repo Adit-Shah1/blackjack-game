@@ -392,3 +392,173 @@ TEST_CASE("Insurance payout is 2 to 1", "[round]") {
 
     REQUIRE(round.seats()[0].bankroll == 1000);
 }
+
+TEST_CASE("addSeat creates additional seats", "[round][multiplayer]") {
+    RuleSet rules;
+    RoundState round(rules);
+
+    REQUIRE(round.seats().size() == 1);
+    REQUIRE(round.seats()[0].name == "Player");
+
+    round.addSeat("Alice", 1000);
+    round.addSeat("Bob", 1500);
+
+    REQUIRE(round.seats().size() == 3);
+    REQUIRE(round.seats()[1].name == "Alice");
+    REQUIRE(round.seats()[1].bankroll == 1000);
+    REQUIRE(round.seats()[2].name == "Bob");
+    REQUIRE(round.seats()[2].bankroll == 1500);
+}
+
+TEST_CASE("allSeatsHaveBets requires every seat to bet", "[round][multiplayer]") {
+    RuleSet rules;
+    RoundState round(rules);
+    round.addSeat("Alice", 1000);
+    round.addSeat("Bob", 1000);
+
+    REQUIRE(round.allSeatsHaveBets() == false);
+
+    round.placeBet(0, 50);
+    REQUIRE(round.allSeatsHaveBets() == false);
+
+    round.placeBet(1, 50);
+    REQUIRE(round.allSeatsHaveBets() == false);
+
+    round.placeBet(2, 50);
+    REQUIRE(round.allSeatsHaveBets() == true);
+}
+
+TEST_CASE("Multi-seat turn order", "[round][multiplayer]") {
+    RuleSet rules;
+    RoundState round(rules);
+    round.addSeat("Alice", 1000);
+    round.addSeat("Bob", 1000);
+
+    round.startRound();
+    round.placeBet(0, 50);
+    round.placeBet(1, 50);
+    round.placeBet(2, 50);
+
+    // Force known hands for deterministic testing
+    round.phase() = RoundPhase::PlayerTurns;
+    round.currentSeatIndex() = 0;
+    round.currentHandIndex() = 0;
+
+    round.seats()[0].hands[0].hand.clear();
+    round.seats()[0].hands[0].hand.addCard(Card(Suit::Hearts, Rank::Ten));
+    round.seats()[0].hands[0].hand.addCard(Card(Suit::Spades, Rank::Six));
+
+    round.seats()[1].hands[0].hand.clear();
+    round.seats()[1].hands[0].hand.addCard(Card(Suit::Diamonds, Rank::Ten));
+    round.seats()[1].hands[0].hand.addCard(Card(Suit::Clubs, Rank::Seven));
+
+    round.seats()[2].hands[0].hand.clear();
+    round.seats()[2].hands[0].hand.addCard(Card(Suit::Hearts, Rank::Nine));
+    round.seats()[2].hands[0].hand.addCard(Card(Suit::Spades, Rank::Eight));
+
+    round.dealer().hand.clear();
+    round.dealer().hand.addCard(Card(Suit::Clubs, Rank::Ten));
+    round.dealer().holeCard = Card(Suit::Diamonds, Rank::Seven);
+    round.dealer().holeCardVisible = false;
+
+    // Seat 0 stands
+    round.stand(0, 0);
+    round.nextHand();
+    round.advancePhase();
+
+    REQUIRE(round.currentSeatIndex() == 1);
+    REQUIRE(round.currentHandIndex() == 0);
+
+    // Seat 1 stands
+    round.stand(1, 0);
+    round.nextHand();
+    round.advancePhase();
+
+    REQUIRE(round.currentSeatIndex() == 2);
+    REQUIRE(round.currentHandIndex() == 0);
+
+    // Seat 2 stands
+    round.stand(2, 0);
+    round.nextHand();
+    round.advancePhase();
+
+    // All done -> dealer turn
+    REQUIRE(round.phase() == RoundPhase::DealerTurn);
+}
+
+TEST_CASE("Multi-seat payouts are correct", "[round][multiplayer]") {
+    RuleSet rules;
+    RoundState round(rules);
+    round.addSeat("Alice", 1000);
+    round.addSeat("Bob", 1000);
+
+    round.startRound();
+    round.placeBet(0, 100);
+    round.placeBet(1, 100);
+    round.placeBet(2, 100);
+
+    // Set up known hands
+    round.seats()[0].hands[0].hand.clear();
+    round.seats()[0].hands[0].hand.addCard(Card(Suit::Hearts, Rank::Ace));
+    round.seats()[0].hands[0].hand.addCard(Card(Suit::Spades, Rank::King));
+
+    round.seats()[1].hands[0].hand.clear();
+    round.seats()[1].hands[0].hand.addCard(Card(Suit::Diamonds, Rank::Ten));
+    round.seats()[1].hands[0].hand.addCard(Card(Suit::Clubs, Rank::Six));
+
+    round.seats()[2].hands[0].hand.clear();
+    round.seats()[2].hands[0].hand.addCard(Card(Suit::Hearts, Rank::Ten));
+    round.seats()[2].hands[0].hand.addCard(Card(Suit::Spades, Rank::Five));
+
+    round.dealer().hand.clear();
+    round.dealer().hand.addCard(Card(Suit::Clubs, Rank::Ten));
+    round.dealer().hand.addCard(Card(Suit::Diamonds, Rank::Eight));
+    round.dealer().holeCardVisible = true;
+
+    round.evaluatePayouts();
+
+    // Seat 0: Blackjack (3:2 payout) = 100 + 150 = 250 returned
+    REQUIRE(round.seats()[0].bankroll == 1150);
+    // Seat 1: 16 vs dealer 18 -> lose
+    REQUIRE(round.seats()[1].bankroll == 900);
+    // Seat 2: 15 vs dealer 18 -> lose
+    REQUIRE(round.seats()[2].bankroll == 900);
+}
+
+TEST_CASE("Multi-seat split aces auto-stand", "[round][multiplayer]") {
+    RuleSet rules;
+    RoundState round(rules);
+    round.addSeat("Alice", 1000);
+
+    round.startRound();
+    REQUIRE(round.placeBet(0, 50) == true);
+    REQUIRE(round.placeBet(1, 50) == true);
+
+    round.phase() = RoundPhase::PlayerTurns;
+    round.currentSeatIndex() = 0;
+    round.currentHandIndex() = 0;
+
+    round.seats()[0].hands[0].hand.clear();
+    round.seats()[0].hands[0].hand.addCard(Card(Suit::Hearts, Rank::Ace));
+    round.seats()[0].hands[0].hand.addCard(Card(Suit::Spades, Rank::Ace));
+
+    round.seats()[1].hands[0].hand.clear();
+    round.seats()[1].hands[0].hand.addCard(Card(Suit::Hearts, Rank::Ten));
+    round.seats()[1].hands[0].hand.addCard(Card(Suit::Spades, Rank::Seven));
+
+    REQUIRE(round.split(0, 0) == true);
+    REQUIRE(round.seats()[0].hands.size() == 2);
+    REQUIRE(round.seats()[0].hands[0].finished == true);
+    REQUIRE(round.seats()[0].hands[1].finished == true);
+    REQUIRE(round.seats()[1].hands.size() == 1);
+    REQUIRE(round.seats()[1].hands[0].finished == false);
+    REQUIRE(round.allPlayerHandsFinished() == false);
+
+    // Next hand should advance to seat 1
+    round.nextHand();
+    REQUIRE(round.currentHandIndex() == 1);
+    round.advancePhase();
+
+    REQUIRE(round.currentSeatIndex() == 1);
+    REQUIRE(round.currentHandIndex() == 0);
+}
