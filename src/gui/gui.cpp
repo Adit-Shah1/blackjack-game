@@ -6,6 +6,7 @@
 #include <SDL_ttf.h>
 #include <SDL_image.h>
 #include <algorithm>
+#include <cmath>
 #include <iostream>
 
 namespace blackjack {
@@ -872,6 +873,75 @@ void Application::quit() {
 }
 
 // ============================================================================
+// AnimationSystem
+// ============================================================================
+
+float AnimationSystem::applyEasing(float t, Easing e) const {
+    switch (e) {
+        case Easing::Linear: return t;
+        case Easing::EaseIn: return t * t;
+        case Easing::EaseOut: return 1.0f - (1.0f - t) * (1.0f - t);
+        case Easing::EaseInOut:
+            if (t < 0.5f) return 2.0f * t * t;
+            return 1.0f - std::pow(-2.0f * t + 2.0f, 2.0f) / 2.0f;
+    }
+    return t;
+}
+
+void AnimationSystem::addTween(Tween tween) {
+    if (tween.target) {
+        *tween.target = tween.from;
+    }
+    m_tweens.push_back(std::move(tween));
+}
+
+void AnimationSystem::update(float dt) {
+    for (auto& tween : m_tweens) {
+        if (tween.done) continue;
+        tween.elapsed += dt;
+        if (tween.elapsed >= tween.duration) {
+            tween.elapsed = tween.duration;
+            tween.done = true;
+            if (tween.target) {
+                *tween.target = tween.to;
+            }
+            if (tween.onComplete) {
+                tween.onComplete();
+            }
+        } else {
+            float t = tween.duration > 0.0f ? tween.elapsed / tween.duration : 1.0f;
+            float eased = applyEasing(t, tween.easing);
+            if (tween.target) {
+                *tween.target = tween.from + (tween.to - tween.from) * eased;
+            }
+        }
+    }
+    m_tweens.erase(
+        std::remove_if(m_tweens.begin(), m_tweens.end(),
+            [](const Tween& t) { return t.done; }),
+        m_tweens.end());
+}
+
+void AnimationSystem::clear() {
+    m_tweens.clear();
+}
+
+bool AnimationSystem::hasActiveTweens() const {
+    for (const auto& tween : m_tweens) {
+        if (!tween.done) return true;
+    }
+    return false;
+}
+
+size_t AnimationSystem::activeCount() const {
+    size_t count = 0;
+    for (const auto& tween : m_tweens) {
+        if (!tween.done) ++count;
+    }
+    return count;
+}
+
+// ============================================================================
 // MainMenuScreen
 // ============================================================================
 
@@ -929,7 +999,7 @@ void MainMenuScreen::render(SDL_Renderer* renderer) {
     SDL_RenderClear(renderer);
 
     drawScreenLabel(renderer, m_app->font(), "BLACKJACK");
-    drawTextCentered(renderer, m_app->font(), "Phase 6 — Asset & Rendering Systems",
+    drawTextCentered(renderer, m_app->font(), "Phase 7 — Animations & Audio",
                      640, 150, 200, 180, 120);
 
     renderButtons(renderer, m_buttons);
@@ -1000,8 +1070,20 @@ void GameTableScreen::onEnter() {
     m_needsUIRebuild = false;
     m_message.clear();
     m_subMessage.clear();
+    m_flyingCards.clear();
+    m_holeCardFlipping = false;
+    m_holeCardFlipTimer = 0.0f;
+    m_screenFlash.active = false;
+    m_lastDealerCardCount = 0;
+    m_outcomeTexts.clear();
+    m_displayedBankroll = m_round->seats()[0].bankroll;
     rebuildUI();
     updateMessage();
+    m_app->audioManager().playAmbient("casino_ambient");
+}
+
+void GameTableScreen::onExit() {
+    m_app->audioManager().stopAmbient();
 }
 
 void GameTableScreen::rebuildUI() {
@@ -1143,6 +1225,30 @@ void GameTableScreen::onDeal() {
     if (!m_round) return;
     m_round->placeBet(0, m_currentBet);
     m_round->advancePhase();
+
+    // Animate initial deal: 4 cards from deck
+    float deckX = 640.0f - 35.0f;
+    float deckY = 360.0f - 49.0f;
+
+    const auto& playerHand = m_round->seats()[0].hands[0].hand;
+    if (playerHand.cardCount() >= 2) {
+        int px1, py1, px2, py2;
+        getPlayerCardPosition(0, 0, px1, py1);
+        getPlayerCardPosition(0, 1, px2, py2);
+        spawnCardFly(playerHand.cards()[0], deckX, deckY, static_cast<float>(px1), static_cast<float>(py1), true, 0.0f, 0, 0);
+        spawnCardFly(playerHand.cards()[1], deckX, deckY, static_cast<float>(px2), static_cast<float>(py2), true, 0.1f, 0, 1);
+    }
+
+    const auto& dealer = m_round->dealer();
+    if (dealer.hand.cardCount() >= 1) {
+        int dx, dy;
+        getDealerCardPosition(0, dx, dy);
+        spawnCardFly(dealer.hand.cards()[0], deckX, deckY, static_cast<float>(dx), static_cast<float>(dy), true, 0.05f, -1, 0);
+        // Hole card is dealt face down — no fly animation for it
+    }
+
+    m_lastDealerCardCount = m_round->dealer().hand.cardCount();
+    m_app->audioManager().playSFX("shuffle");
     m_needsUIRebuild = true;
 }
 
@@ -1150,7 +1256,17 @@ void GameTableScreen::onHit() {
     if (!m_round) return;
     int handIdx = m_round->currentHandIndex();
     if (handIdx < 0) return;
+    int prevCount = m_round->seats()[0].hands[handIdx].hand.cardCount();
     m_round->hit(0, handIdx);
+    int newCount = m_round->seats()[0].hands[handIdx].hand.cardCount();
+    if (newCount > prevCount) {
+        int tx, ty;
+        getPlayerCardPosition(handIdx, newCount - 1, tx, ty);
+        spawnCardFly(m_round->seats()[0].hands[handIdx].hand.cards().back(),
+                     640.0f - 35.0f, 360.0f - 49.0f,
+                     static_cast<float>(tx), static_cast<float>(ty), true, 0.0f, handIdx, newCount - 1);
+        m_app->audioManager().playSFX("card_deal");
+    }
     if (m_round->seats()[0].hands[handIdx].finished) {
         m_round->nextHand();
     }
@@ -1163,6 +1279,7 @@ void GameTableScreen::onStand() {
     int handIdx = m_round->currentHandIndex();
     if (handIdx < 0) return;
     m_round->stand(0, handIdx);
+    m_app->audioManager().playSFX("stand_click");
     m_round->nextHand();
     m_round->advancePhase();
     m_needsUIRebuild = true;
@@ -1172,7 +1289,18 @@ void GameTableScreen::onDouble() {
     if (!m_round) return;
     int handIdx = m_round->currentHandIndex();
     if (handIdx < 0) return;
+    int prevCount = m_round->seats()[0].hands[handIdx].hand.cardCount();
     m_round->doubleDown(0, handIdx);
+    int newCount = m_round->seats()[0].hands[handIdx].hand.cardCount();
+    if (newCount > prevCount) {
+        int tx, ty;
+        getPlayerCardPosition(handIdx, newCount - 1, tx, ty);
+        spawnCardFly(m_round->seats()[0].hands[handIdx].hand.cards().back(),
+                     640.0f - 35.0f, 360.0f - 49.0f,
+                     static_cast<float>(tx), static_cast<float>(ty), true, 0.0f, handIdx, newCount - 1);
+        m_app->audioManager().playSFX("card_deal");
+    }
+    m_app->audioManager().playSFX("chip_stack");
     m_round->nextHand();
     m_round->advancePhase();
     m_needsUIRebuild = true;
@@ -1183,6 +1311,23 @@ void GameTableScreen::onSplit() {
     int handIdx = m_round->currentHandIndex();
     if (handIdx < 0) return;
     m_round->split(0, handIdx);
+
+    // Animate new cards dealt to both split hands
+    const auto& hands = m_round->seats()[0].hands;
+    for (size_t h = handIdx; h < hands.size() && h <= static_cast<size_t>(handIdx) + 1; ++h) {
+        int cardCount = hands[h].hand.cardCount();
+        if (cardCount >= 2) {
+            int tx, ty;
+            getPlayerCardPosition(static_cast<int>(h), cardCount - 1, tx, ty);
+            spawnCardFly(hands[h].hand.cards().back(),
+                         640.0f - 35.0f, 360.0f - 49.0f,
+                         static_cast<float>(tx), static_cast<float>(ty), true,
+                         static_cast<float>(h - handIdx) * 0.05f, static_cast<int>(h), cardCount - 1);
+        }
+    }
+    m_app->audioManager().playSFX("card_deal");
+    m_app->audioManager().playSFX("chip_stack");
+
     const auto& hand = m_round->seats()[0].hands[handIdx];
     if (hand.finished) {
         m_round->nextHand();
@@ -1196,6 +1341,7 @@ void GameTableScreen::onSurrender() {
     int handIdx = m_round->currentHandIndex();
     if (handIdx < 0) return;
     m_round->surrender(0, handIdx);
+    m_app->audioManager().playSFX("surrender");
     m_round->nextHand();
     m_round->advancePhase();
     m_needsUIRebuild = true;
@@ -1205,12 +1351,14 @@ void GameTableScreen::onInsuranceYes() {
     if (!m_round) return;
     int maxInsurance = m_round->seats()[0].hands[0].bet.mainBet / 2;
     m_round->takeInsurance(0, maxInsurance);
+    m_app->audioManager().playSFX("chip_stack");
     m_round->advancePhase();
     m_needsUIRebuild = true;
 }
 
 void GameTableScreen::onInsuranceNo() {
     if (!m_round) return;
+    m_app->audioManager().playSFX("stand_click");
     m_round->advancePhase();
     m_needsUIRebuild = true;
 }
@@ -1221,9 +1369,140 @@ void GameTableScreen::onNextRound() {
     m_currentBet = m_round->rules().minBet;
     m_lastPhase = RoundPhase::RoundComplete;
     m_autoAdvanceTimer = 0.0f;
+    m_flyingCards.clear();
+    m_holeCardFlipping = false;
+    m_holeCardFlipTimer = 0.0f;
+    m_screenFlash.active = false;
+    m_lastDealerCardCount = 0;
+    m_outcomeTexts.clear();
+    m_displayedBankroll = m_round->seats()[0].bankroll;
     m_needsUIRebuild = true;
     rebuildUI();
     updateMessage();
+    m_app->audioManager().playSFX("new_round");
+}
+
+void GameTableScreen::spawnCardFly(const Card& card, float fromX, float fromY,
+                                    float toX, float toY, bool faceUp, float delay,
+                                    int targetHandIndex, int targetCardIndex) {
+    FlyingCard fc;
+    fc.card = card;
+    fc.startX = fromX;
+    fc.startY = fromY;
+    fc.targetX = toX;
+    fc.targetY = toY;
+    fc.x = fromX;
+    fc.y = fromY;
+    fc.faceUp = faceUp;
+    fc.delay = delay;
+    fc.duration = 0.25f;
+    fc.elapsed = 0.0f;
+    fc.done = false;
+    fc.targetHandIndex = targetHandIndex;
+    fc.targetCardIndex = targetCardIndex;
+    m_flyingCards.push_back(fc);
+}
+
+void GameTableScreen::spawnHoleCardFlip() {
+    m_holeCardFlipping = true;
+    m_holeCardFlipTimer = 0.0f;
+    m_app->audioManager().playSFX("card_flip");
+}
+
+void GameTableScreen::spawnScreenFlash(const Color& color, float duration) {
+    m_screenFlash.color = color;
+    m_screenFlash.duration = duration;
+    m_screenFlash.elapsed = 0.0f;
+    m_screenFlash.active = true;
+}
+
+void GameTableScreen::getPlayerCardPosition(int handIndex, int cardIndex, int& outX, int& outY) {
+    const int cw = 70;
+    const int overlap = 20;
+    int cardCount = m_round->seats()[0].hands[handIndex].hand.cardCount();
+    int totalWidth = cardCount * cw - (cardCount - 1) * overlap;
+    int startX = (1280 - totalWidth) / 2;
+    outX = startX + cardIndex * (cw - overlap);
+    outY = 380 + handIndex * 110;
+}
+
+void GameTableScreen::getDealerCardPosition(int cardIndex, int& outX, int& outY) {
+    const int cw = 70;
+    const int overlap = 20;
+    // Use fixed count of 2 when hole card exists but isn't visible,
+    // so layout doesn't jump when hole card is revealed.
+    int cardCount = m_round->dealer().hand.cardCount();
+    bool holeVisible = m_round->dealer().holeCardVisible;
+    int layoutCount = (cardCount == 1 && !holeVisible) ? 2 : cardCount;
+    int totalWidth = layoutCount * cw - (layoutCount - 1) * overlap;
+    int startX = (1280 - totalWidth) / 2;
+    outX = startX + cardIndex * (cw - overlap);
+    outY = 80;
+}
+
+void GameTableScreen::updateAnimations(float deltaTime) {
+    // Flying cards
+    for (auto& fc : m_flyingCards) {
+        if (fc.done) continue;
+        if (fc.delay > 0.0f) {
+            fc.delay -= deltaTime;
+            continue;
+        }
+        fc.elapsed += deltaTime;
+        float t = std::min(1.0f, fc.elapsed / fc.duration);
+        float ease = 1.0f - (1.0f - t) * (1.0f - t);  // EaseOut
+        fc.x = fc.startX + (fc.targetX - fc.startX) * ease;
+        fc.y = fc.startY + (fc.targetY - fc.startY) * ease;
+        if (t >= 1.0f) fc.done = true;
+    }
+    m_flyingCards.erase(
+        std::remove_if(m_flyingCards.begin(), m_flyingCards.end(),
+            [](const FlyingCard& fc) { return fc.done; }),
+        m_flyingCards.end());
+
+    // Hole card flip
+    if (m_holeCardFlipping) {
+        m_holeCardFlipTimer += deltaTime;
+        if (m_holeCardFlipTimer >= 0.3f) {
+            m_holeCardFlipping = false;
+            m_holeCardFlipTimer = 0.0f;
+        }
+    }
+
+    // Screen flash
+    if (m_screenFlash.active) {
+        m_screenFlash.elapsed += deltaTime;
+        if (m_screenFlash.elapsed >= m_screenFlash.duration) {
+            m_screenFlash.active = false;
+        }
+    }
+}
+
+void GameTableScreen::playOutcomeAudio() {
+    if (!m_round) return;
+    const auto& seat = m_round->seats()[0];
+    bool hasBlackjack = false;
+    bool hasWin = false;
+    bool hasBust = false;
+    bool hasLose = false;
+    for (const auto& hand : seat.hands) {
+        switch (hand.outcome) {
+            case HandOutcome::Blackjack: hasBlackjack = true; break;
+            case HandOutcome::Win: hasWin = true; break;
+            case HandOutcome::Bust: hasBust = true; break;
+            case HandOutcome::Lose: hasLose = true; break;
+            default: break;
+        }
+    }
+    if (hasBlackjack) {
+        m_app->audioManager().playSFX("blackjack_fanfare");
+    } else if (hasWin) {
+        m_app->audioManager().playSFX("win_chips");
+    } else if (hasBust) {
+        m_app->audioManager().playSFX("bust_sad");
+    } else if (hasLose) {
+        m_app->audioManager().playSFX("lose");
+    }
 }
 
 void GameTableScreen::handleEvent(const SDL_Event& event) {
@@ -1270,15 +1549,97 @@ void GameTableScreen::handleEvent(const SDL_Event& event) {
 void GameTableScreen::update(float deltaTime) {
     if (!m_round) return;
 
-    if (m_round->phase() != m_lastPhase || m_needsUIRebuild) {
-        m_lastPhase = m_round->phase();
+    updateAnimations(deltaTime);
+
+    RoundPhase currentPhase = m_round->phase();
+
+    if (currentPhase != m_lastPhase || m_needsUIRebuild) {
+        RoundPhase prevPhase = m_lastPhase;
+        m_lastPhase = currentPhase;
         m_needsUIRebuild = false;
         rebuildUI();
         updateMessage();
         m_autoAdvanceTimer = 0.0f;
+
+        // Phase transition audio and effects
+        if (currentPhase == RoundPhase::DealerTurn && prevPhase == RoundPhase::PlayerTurns) {
+            spawnHoleCardFlip();
+        }
+        if (currentPhase == RoundPhase::Payout && prevPhase == RoundPhase::EvaluateHands) {
+            playOutcomeAudio();
+        }
+        if (currentPhase == RoundPhase::RoundComplete && prevPhase != RoundPhase::RoundComplete) {
+            // Trigger visual effects based on outcomes
+            const auto& seat = m_round->seats()[0];
+            bool hasBlackjack = false;
+            bool hasWin = false;
+            bool hasBust = false;
+            bool hasLose = false;
+            for (const auto& hand : seat.hands) {
+                switch (hand.outcome) {
+                    case HandOutcome::Blackjack: hasBlackjack = true; break;
+                    case HandOutcome::Win: hasWin = true; break;
+                    case HandOutcome::Bust: hasBust = true; break;
+                    case HandOutcome::Lose: hasLose = true; break;
+                    default: break;
+                }
+            }
+            if (hasBlackjack) {
+                spawnScreenFlash({255, 215, 0, 120}, 1.0f);
+            } else if (hasWin) {
+                spawnScreenFlash({255, 215, 0, 80}, 0.5f);
+            } else if (hasBust) {
+                spawnScreenFlash({212, 0, 0, 80}, 0.5f);
+            } else if (hasLose) {
+                spawnScreenFlash({212, 0, 0, 40}, 0.3f);
+            }
+
+            // Outcome text pop-in
+            for (size_t i = 0; i < seat.hands.size(); ++i) {
+                const auto& hand = seat.hands[i];
+                std::string text;
+                Color color{255, 255, 255, 255};
+                switch (hand.outcome) {
+                    case HandOutcome::Blackjack: text = "BLACKJACK!"; color = {255, 215, 0, 255}; break;
+                    case HandOutcome::Win: text = "WIN!"; color = {0, 255, 100, 255}; break;
+                    case HandOutcome::Push: text = "PUSH"; color = {180, 180, 180, 255}; break;
+                    case HandOutcome::Bust: text = "BUST!"; color = {212, 0, 0, 255}; break;
+                    case HandOutcome::Lose: text = "LOSE"; color = {212, 0, 0, 255}; break;
+                    case HandOutcome::Surrender: text = "SURRENDER"; color = {180, 140, 80, 255}; break;
+                    default: break;
+                }
+                if (!text.empty()) {
+                    int tx = 0, ty = 0;
+                    getPlayerCardPosition(static_cast<int>(i), 0, tx, ty);
+                    ty -= 30;
+                    spawnOutcomeText(text, static_cast<float>(tx) + 35.0f, static_cast<float>(ty), color);
+                }
+            }
+        }
     }
 
-    switch (m_round->phase()) {
+    // Dealer hit card fly animations
+    if (currentPhase == RoundPhase::DealerTurn) {
+        int dealerCardCount = m_round->dealer().hand.cardCount();
+        if (dealerCardCount > m_lastDealerCardCount && m_lastDealerCardCount >= 2) {
+            for (int i = m_lastDealerCardCount; i < dealerCardCount; ++i) {
+                int tx, ty;
+                getDealerCardPosition(i, tx, ty);
+                spawnCardFly(m_round->dealer().hand.cards()[i],
+                             640.0f - 35.0f, 360.0f - 49.0f,
+                             static_cast<float>(tx), static_cast<float>(ty), true, 0.0f, -1, i);
+                m_app->audioManager().playSFX("card_deal");
+            }
+        }
+        if (dealerCardCount > 0) {
+            m_lastDealerCardCount = dealerCardCount;
+        }
+    }
+
+    updateOutcomeTexts(deltaTime);
+    updateBankrollTicker(deltaTime);
+
+    switch (currentPhase) {
         case RoundPhase::PlayerTurns: {
             int handIdx = m_round->currentHandIndex();
             if (handIdx >= 0 && handIdx < static_cast<int>(m_round->seats()[0].hands.size())) {
@@ -1305,21 +1666,22 @@ void GameTableScreen::update(float deltaTime) {
     }
 }
 
-void GameTableScreen::renderCard(SDL_Renderer* r, const Card& card, int x, int y, bool faceUp) {
-    const int cw = 70;
+void GameTableScreen::renderCard(SDL_Renderer* r, const Card& card, int x, int y, bool faceUp, float scaleX) {
+    const int cw = static_cast<int>(70 * scaleX);
     const int ch = 98;
+    int cx = x + (70 - cw) / 2;
 
     if (!faceUp) {
-        renderCardBack(r, x, y);
+        renderCardBack(r, cx, y, scaleX);
         return;
     }
 
     // Shadow
-    drawShadow(r, x, y, cw, ch, 2, {0, 0, 0, 100});
+    drawShadow(r, cx, y, cw, ch, 2, {0, 0, 0, 100});
 
     // White rounded card face
-    drawRoundedRect(r, x, y, cw, ch, 4, {255, 255, 255, 255});
-    drawRoundedRectOutline(r, x, y, cw, ch, 4, {180, 180, 180, 255});
+    drawRoundedRect(r, cx, y, cw, ch, 4, {255, 255, 255, 255});
+    drawRoundedRectOutline(r, cx, y, cw, ch, 4, {180, 180, 180, 255});
 
     bool red = isRedSuit(card);
     unsigned char rc = red ? 212 : 26;
@@ -1329,16 +1691,16 @@ void GameTableScreen::renderCard(SDL_Renderer* r, const Card& card, int x, int y
     std::string rank = rankDisplay(card);
     Color suitColor{rc, gc, bc, 255};
 
-    drawText(r, m_app->font(), rank, x + 4, y + 2, rc, gc, bc);
-    drawSuitSymbol(r, card.suit(), x + 4 + 6, y + 24 + 5, 1, suitColor);
-    drawSuitSymbol(r, card.suit(), x + cw / 2, y + ch / 2, 2, suitColor);
-
-    // Bottom-right mirrored suit
-    drawSuitSymbol(r, card.suit(), x + cw - 8, y + ch - 12, 1, suitColor);
+    drawText(r, m_app->font(), rank, cx + 4, y + 2, rc, gc, bc);
+    if (scaleX >= 0.5f) {
+        drawSuitSymbol(r, card.suit(), cx + 10, y + 29, 1, suitColor);
+        drawSuitSymbol(r, card.suit(), cx + cw / 2, y + ch / 2, 2, suitColor);
+        drawSuitSymbol(r, card.suit(), cx + cw - 8, y + ch - 12, 1, suitColor);
+    }
 }
 
-void GameTableScreen::renderCardBack(SDL_Renderer* r, int x, int y) {
-    const int cw = 70;
+void GameTableScreen::renderCardBack(SDL_Renderer* r, int x, int y, float scaleX) {
+    const int cw = static_cast<int>(70 * scaleX);
     const int ch = 98;
 
     // Shadow
@@ -1365,12 +1727,37 @@ void GameTableScreen::renderDealer(SDL_Renderer* r) {
     const int cw = 70;
     const int overlap = 20;
 
-    int totalWidth = cardCount * cw - (cardCount - 1) * overlap;
+    // Use fixed count of 2 for layout when hole card exists but isn't visible yet,
+    // to prevent upcard from jumping when hole card is revealed.
+    int layoutCount = (dealer.hand.cardCount() == 1 && !holeVisible) ? 2 : cardCount;
+    int totalWidth = layoutCount * cw - (layoutCount - 1) * overlap;
     int startX = (1280 - totalWidth) / 2;
 
     for (int i = 0; i < cardCount; ++i) {
         int cx = startX + i * (cw - overlap);
-        if (!holeVisible && i == 1) {
+
+        // Skip rendering cards that are currently animating as flying cards
+        bool skip = false;
+        for (const auto& fc : m_flyingCards) {
+            if (fc.targetHandIndex == -1 && fc.targetCardIndex == i && !fc.done) {
+                skip = true;
+                break;
+            }
+        }
+        if (skip) continue;
+
+        if (m_holeCardFlipping && i == 1) {
+            float t = m_holeCardFlipTimer / 0.3f;
+            if (t < 0.5f) {
+                // First half: card back shrinking
+                float scale = 1.0f - t * 2.0f;
+                renderCardBack(r, cx, 80, scale);
+            } else {
+                // Second half: face-up card growing
+                float scale = (t - 0.5f) * 2.0f;
+                renderCard(r, dealer.hand.cards()[i], cx, 80, true, scale);
+            }
+        } else if (!holeVisible && i == 1) {
             renderCardBack(r, cx, 80);
         } else {
             renderCard(r, dealer.hand.cards()[i], cx, 80, true);
@@ -1393,17 +1780,31 @@ void GameTableScreen::renderPlayer(SDL_Renderer* r) {
         int startX = (1280 - totalWidth) / 2;
         int y = 380 + static_cast<int>(h) * 110;
 
-        // Highlight active hand during PlayerTurns
+        // Highlight active hand during PlayerTurns with pulsing glow
         if (m_round->phase() == RoundPhase::PlayerTurns &&
             static_cast<int>(h) == currentHandIdx && !handState.finished) {
+            uint32_t ticks = SDL_GetTicks();
+            float pulse = (std::sin(ticks * 0.005f) + 1.0f) * 0.5f; // 0 to 1
+            uint8_t alpha = static_cast<uint8_t>(120 + pulse * 80); // 120 to 200
             SDL_SetRenderDrawColor(r, 255, 215, 0, 255);
             SDL_Rect highlight{ startX - 6, y - 6, totalWidth + 12, ch + 12 };
             SDL_RenderDrawRect(r, &highlight);
-            SDL_SetRenderDrawColor(r, 255, 215, 0, 120);
+            SDL_SetRenderDrawColor(r, 255, 215, 0, alpha);
             SDL_RenderFillRect(r, &highlight);
         }
 
         for (int i = 0; i < cardCount; ++i) {
+            // Skip rendering cards that are currently animating as flying cards
+            bool skip = false;
+            for (const auto& fc : m_flyingCards) {
+                if (fc.targetHandIndex == static_cast<int>(h) &&
+                    fc.targetCardIndex == i && !fc.done) {
+                    skip = true;
+                    break;
+                }
+            }
+            if (skip) continue;
+
             int cx = startX + i * (cw - overlap);
             renderCard(r, handState.hand.cards()[i], cx, y, true);
         }
@@ -1422,9 +1823,23 @@ void GameTableScreen::renderPlayer(SDL_Renderer* r) {
 
 void GameTableScreen::renderStatus(SDL_Renderer* r) {
     if (!m_round) return;
-    const auto& seat = m_round->seats()[0];
-    std::string bankroll = "Bankroll: $" + std::to_string(seat.bankroll);
+    std::string bankroll = "Bankroll: $" + std::to_string(m_displayedBankroll);
     drawText(r, m_app->font(), bankroll, 1050, 20, 255, 255, 255);
+}
+
+void GameTableScreen::renderFlyingCards(SDL_Renderer* r) {
+    for (const auto& fc : m_flyingCards) {
+        renderCard(r, fc.card, static_cast<int>(fc.x), static_cast<int>(fc.y), fc.faceUp);
+    }
+}
+
+void GameTableScreen::renderScreenFlash(SDL_Renderer* r) {
+    if (!m_screenFlash.active) return;
+    float t = m_screenFlash.elapsed / m_screenFlash.duration;
+    float fade = 1.0f - t;
+    uint8_t alpha = static_cast<uint8_t>(fade * m_screenFlash.color.a);
+    fillRect(r, 0, 0, 1280, 720,
+             {m_screenFlash.color.r, m_screenFlash.color.g, m_screenFlash.color.b, alpha});
 }
 
 void GameTableScreen::render(SDL_Renderer* renderer) {
@@ -1451,7 +1866,9 @@ void GameTableScreen::render(SDL_Renderer* renderer) {
 
     renderDealer(renderer);
     renderPlayer(renderer);
+    renderFlyingCards(renderer);
     renderStatus(renderer);
+    renderBetChips(renderer);
 
     // Message panel
     if (!m_message.empty() || !m_subMessage.empty()) {
@@ -1469,6 +1886,136 @@ void GameTableScreen::render(SDL_Renderer* renderer) {
 
     renderButtons(renderer, m_buttons);
     drawEscHint(renderer, m_app->font());
+    renderScreenFlash(renderer);
+    renderOutcomeTexts(renderer);
+}
+
+void GameTableScreen::spawnOutcomeText(const std::string& text, float x, float y, const Color& color) {
+    OutcomeText ot;
+    ot.text = text;
+    ot.x = x;
+    ot.y = y;
+    ot.color = color;
+    ot.scale = 0.0f;
+    ot.elapsed = 0.0f;
+    ot.done = false;
+    m_outcomeTexts.push_back(ot);
+}
+
+void GameTableScreen::updateOutcomeTexts(float deltaTime) {
+    for (auto& ot : m_outcomeTexts) {
+        if (ot.done) continue;
+        ot.elapsed += deltaTime;
+        if (ot.elapsed >= ot.duration) {
+            ot.done = true;
+            ot.scale = 1.0f;
+        } else {
+            float t = ot.elapsed / ot.duration;
+            // Bounce effect: overshoot then settle
+            float bounce;
+            if (t < 0.4f) {
+                bounce = 1.3f * (t / 0.4f);
+            } else if (t < 0.6f) {
+                float sub = (t - 0.4f) / 0.2f;
+                bounce = 1.3f - 0.4f * sub;
+            } else {
+                float sub = (t - 0.6f) / 0.4f;
+                bounce = 0.9f + 0.1f * sub;
+            }
+            ot.scale = bounce;
+        }
+    }
+    m_outcomeTexts.erase(
+        std::remove_if(m_outcomeTexts.begin(), m_outcomeTexts.end(),
+            [](const OutcomeText& ot) { return ot.done; }),
+        m_outcomeTexts.end());
+}
+
+void GameTableScreen::renderOutcomeTexts(SDL_Renderer* r) {
+    for (const auto& ot : m_outcomeTexts) {
+        if (!m_app->font() || ot.text.empty()) continue;
+
+        int tw = 0, th = 0;
+        TTF_SizeText(m_app->font(), ot.text.c_str(), &tw, &th);
+
+        int w = static_cast<int>(tw * ot.scale);
+        int h = static_cast<int>(th * ot.scale);
+        int x = static_cast<int>(ot.x) - w / 2;
+        int y = static_cast<int>(ot.y) - h / 2;
+
+        SDL_Color color{ot.color.r, ot.color.g, ot.color.b, ot.color.a};
+        SDL_Surface* surface = TTF_RenderText_Blended(m_app->font(), ot.text.c_str(), color);
+        if (surface) {
+            SDL_Texture* texture = SDL_CreateTextureFromSurface(r, surface);
+            if (texture) {
+                SDL_Rect dst{x, y, w, h};
+                SDL_RenderCopy(r, texture, nullptr, &dst);
+                SDL_DestroyTexture(texture);
+            }
+            SDL_FreeSurface(surface);
+        }
+    }
+}
+
+void GameTableScreen::renderBetChips(SDL_Renderer* r) {
+    if (!m_round) return;
+
+    int bet = 0;
+    if (m_round->phase() == RoundPhase::WaitingForBets) {
+        bet = m_currentBet;
+    } else if (m_round->phase() != RoundPhase::RoundComplete) {
+        bet = m_round->seats()[0].hands[0].bet.mainBet;
+    }
+    if (bet <= 0) return;
+
+    int cx = 640;
+    int cy = 330;
+    const int chipW = 28;
+    const int chipH = 18;
+
+    struct ChipDenom { int value; Color color; Color border; };
+    static const ChipDenom chips[] = {
+        {100, {26, 26, 26, 255}, {120, 120, 120, 255}},
+        {25, {0, 170, 68, 255}, {100, 255, 150, 255}},
+        {5, {212, 0, 0, 255}, {255, 150, 150, 255}},
+        {1, {240, 240, 240, 255}, {180, 180, 180, 255}},
+    };
+
+    int stackY = cy;
+    for (const auto& chip : chips) {
+        int count = bet / chip.value;
+        bet %= chip.value;
+        for (int i = 0; i < count; ++i) {
+            int y = stackY - i * 6;
+            drawRoundedRect(r, cx - chipW / 2, y - chipH / 2, chipW, chipH, 4, chip.color);
+            drawRoundedRectOutline(r, cx - chipW / 2, y - chipH / 2, chipW, chipH, 4, chip.border);
+            // White accent dots
+            SDL_SetRenderDrawColor(r, 255, 255, 255, 200);
+            SDL_Rect dot1{cx - chipW / 2 + 2, y - 1, 3, 3};
+            SDL_Rect dot2{cx + chipW / 2 - 5, y - 1, 3, 3};
+            SDL_RenderFillRect(r, &dot1);
+            SDL_RenderFillRect(r, &dot2);
+        }
+        if (count > 0) stackY -= 8;
+    }
+
+    std::string betText = "$" + std::to_string(
+        (m_round->phase() == RoundPhase::WaitingForBets) ? m_currentBet : m_round->seats()[0].hands[0].bet.mainBet);
+    drawTextCentered(r, m_app->font(), betText, cx, cy + 18, 255, 255, 255);
+}
+
+void GameTableScreen::updateBankrollTicker(float deltaTime) {
+    if (!m_round) return;
+    int actual = m_round->seats()[0].bankroll;
+    if (m_displayedBankroll != actual) {
+        int diff = actual - m_displayedBankroll;
+        float speed = 800.0f * deltaTime; // 800 chips per second
+        if (std::abs(diff) <= static_cast<int>(speed)) {
+            m_displayedBankroll = actual;
+        } else {
+            m_displayedBankroll += (diff > 0 ? static_cast<int>(speed) : -static_cast<int>(speed));
+        }
+    }
 }
 
 // ============================================================================

@@ -263,6 +263,34 @@ private:
 };
 
 // ---------------------------------------------------------------------------
+// Animation
+// ---------------------------------------------------------------------------
+enum class Easing { Linear, EaseIn, EaseOut, EaseInOut };
+
+struct Tween {
+    float* target = nullptr;
+    float from = 0.0f;
+    float to = 0.0f;
+    float duration = 0.0f;
+    float elapsed = 0.0f;
+    Easing easing = Easing::EaseOut;
+    bool done = false;
+    std::function<void()> onComplete;
+};
+
+class AnimationSystem {
+public:
+    void addTween(Tween tween);
+    void update(float dt);
+    void clear();
+    bool hasActiveTweens() const;
+    size_t activeCount() const;
+private:
+    std::vector<Tween> m_tweens;
+    float applyEasing(float t, Easing e) const;
+};
+
+// ---------------------------------------------------------------------------
 // Screen base class
 // ---------------------------------------------------------------------------
 class Screen {
@@ -403,6 +431,7 @@ public:
     ~GameTableScreen() override;
 
     void onEnter() override;
+    void onExit() override;
     void handleEvent(const SDL_Event& event) override;
     void update(float deltaTime) override;
     void render(SDL_Renderer* renderer) override;
@@ -433,11 +462,78 @@ private:
     void onInsuranceNo();
     void onNextRound();
 
-    void renderCard(SDL_Renderer* r, const Card& card, int x, int y, bool faceUp);
-    void renderCardBack(SDL_Renderer* r, int x, int y);
+    void renderCard(SDL_Renderer* r, const Card& card, int x, int y, bool faceUp, float scaleX = 1.0f);
+    void renderCardBack(SDL_Renderer* r, int x, int y, float scaleX = 1.0f);
     void renderDealer(SDL_Renderer* r);
     void renderPlayer(SDL_Renderer* r);
     void renderStatus(SDL_Renderer* r);
+
+    // Animation helpers
+    struct FlyingCard {
+        Card card;
+        float x = 0.0f;
+        float y = 0.0f;
+        float startX = 0.0f;
+        float startY = 0.0f;
+        float targetX = 0.0f;
+        float targetY = 0.0f;
+        float elapsed = 0.0f;
+        float delay = 0.0f;
+        float duration = 0.2f;
+        bool faceUp = true;
+        bool done = false;
+        int targetHandIndex = -1;  // -1 for dealer, >=0 for player hand
+        int targetCardIndex = -1;
+    };
+    std::vector<FlyingCard> m_flyingCards;
+
+    struct ScreenFlash {
+        Color color{255, 255, 255, 0};
+        float duration = 0.0f;
+        float elapsed = 0.0f;
+        bool active = false;
+    };
+    ScreenFlash m_screenFlash;
+
+    float m_holeCardFlipTimer = 0.0f;
+    bool m_holeCardFlipping = false;
+
+    // Dealer card count tracking for hit animations
+    int m_lastDealerCardCount = 0;
+
+    // Outcome text pop-in animation
+    struct OutcomeText {
+        std::string text;
+        float x = 0.0f;
+        float y = 0.0f;
+        float scale = 0.0f;
+        float elapsed = 0.0f;
+        float duration = 1.2f;
+        Color color{255,255,255,255};
+        bool done = false;
+    };
+    std::vector<OutcomeText> m_outcomeTexts;
+
+    // Bankroll ticker animation
+    int m_displayedBankroll = 0;
+
+    void spawnCardFly(const Card& card, float fromX, float fromY,
+                      float toX, float toY, bool faceUp, float delay = 0.0f,
+                      int targetHandIndex = -1, int targetCardIndex = -1);
+    void spawnHoleCardFlip();
+    void spawnScreenFlash(const Color& color, float duration);
+    void updateAnimations(float deltaTime);
+    void renderFlyingCards(SDL_Renderer* r);
+    void renderScreenFlash(SDL_Renderer* r);
+    void playOutcomeAudio();
+    void getPlayerCardPosition(int handIndex, int cardIndex, int& outX, int& outY);
+    void getDealerCardPosition(int cardIndex, int& outX, int& outY);
+
+    void spawnOutcomeText(const std::string& text, float x, float y, const Color& color);
+    void updateOutcomeTexts(float deltaTime);
+    void renderOutcomeTexts(SDL_Renderer* r);
+    void renderBetChips(SDL_Renderer* r);
+    void updateBankrollTicker(float deltaTime);
 };
 
 class RoundResultsScreen : public Screen {
