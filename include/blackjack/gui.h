@@ -8,6 +8,7 @@
 #include <functional>
 
 #include <blackjack/round.h>
+#include <blackjack/ai.h>
 
 // SDL forward declarations
 struct SDL_Window;
@@ -465,7 +466,7 @@ private:
     void renderCard(SDL_Renderer* r, const Card& card, int x, int y, bool faceUp, float scaleX = 1.0f);
     void renderCardBack(SDL_Renderer* r, int x, int y, float scaleX = 1.0f);
     void renderDealer(SDL_Renderer* r);
-    void renderPlayer(SDL_Renderer* r);
+
     void renderStatus(SDL_Renderer* r);
 
     // Animation helpers
@@ -482,7 +483,8 @@ private:
         float duration = 0.2f;
         bool faceUp = true;
         bool done = false;
-        int targetHandIndex = -1;  // -1 for dealer, >=0 for player hand
+        int targetSeatIndex = -1;  // -1 for dealer, 0+ for player seat
+        int targetHandIndex = -1;  // hand index within seat
         int targetCardIndex = -1;
     };
     std::vector<FlyingCard> m_flyingCards;
@@ -514,19 +516,26 @@ private:
     };
     std::vector<OutcomeText> m_outcomeTexts;
 
+    // AI opponents
+    std::vector<std::unique_ptr<AIController>> m_aiControllers;
+    float m_aiTurnTimer = 0.0f;
+    float m_aiTurnDelay = 0.6f;
+    bool m_aiInsuranceResolved = false;
+
     // Bankroll ticker animation
     int m_displayedBankroll = 0;
 
     void spawnCardFly(const Card& card, float fromX, float fromY,
                       float toX, float toY, bool faceUp, float delay = 0.0f,
-                      int targetHandIndex = -1, int targetCardIndex = -1);
+                      int targetSeatIndex = -1, int targetHandIndex = -1,
+                      int targetCardIndex = -1);
     void spawnHoleCardFlip();
     void spawnScreenFlash(const Color& color, float duration);
     void updateAnimations(float deltaTime);
     void renderFlyingCards(SDL_Renderer* r);
     void renderScreenFlash(SDL_Renderer* r);
     void playOutcomeAudio();
-    void getPlayerCardPosition(int handIndex, int cardIndex, int& outX, int& outY);
+    void getPlayerCardPosition(int handIndex, int cardIndex, int& outX, int& outY, int seatIndex = 0);
     void getDealerCardPosition(int cardIndex, int& outX, int& outY);
 
     void spawnOutcomeText(const std::string& text, float x, float y, const Color& color);
@@ -534,6 +543,17 @@ private:
     void renderOutcomeTexts(SDL_Renderer* r);
     void renderBetChips(SDL_Renderer* r);
     void updateBankrollTicker(float deltaTime);
+
+    // Multi-seat rendering
+    void renderAllPlayers(SDL_Renderer* r);
+    void renderPlayerSeat(SDL_Renderer* r, int seatIndex, int centerX, int baseY, bool isHuman);
+    int getSeatCenterX(int seatIndex, int totalSeats) const;
+
+    // AI helpers
+    void executeAIAction(int seatIndex, int handIndex);
+    void resolveAllAIInsurance();
+    void setupAIOpponents();
+    void animateInitialDealAllSeats();
 };
 
 class RoundResultsScreen : public Screen {

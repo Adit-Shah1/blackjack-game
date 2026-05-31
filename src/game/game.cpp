@@ -13,6 +13,22 @@ RoundState::RoundState(const RuleSet& rules)
     m_seats[0].name = "Player";
 }
 
+void RoundState::addSeat(const std::string& name, int bankroll) {
+    ParticipantState seat;
+    seat.name = name;
+    seat.bankroll = bankroll;
+    m_seats.push_back(seat);
+}
+
+bool RoundState::allSeatsHaveBets() const {
+    for (const auto& seat : m_seats) {
+        if (seat.hands.empty()) {
+            return false;
+        }
+    }
+    return true;
+}
+
 ActionSet RoundState::getLegalActions(int seatIndex, int handIndex) const {
     ActionSet actions{};
     
@@ -260,19 +276,27 @@ void RoundState::startRound() {
 }
 
 void RoundState::dealInitialCards() {
-    // Standard dealing order: player card, dealer face-up, player card, dealer hole
-    Card playerCard1 = m_shoe.draw();
-    Card dealerUpcard = m_shoe.draw();
-    Card playerCard2 = m_shoe.draw();
-    Card dealerHoleCard = m_shoe.draw();
+    // Standard dealing order: each player gets 1 card, dealer upcard,
+    // each player gets 2nd card, dealer hole card
+    for (auto& seat : m_seats) {
+        if (!seat.hands.empty()) {
+            seat.hands[0].hand.addCard(m_shoe.draw());
+            seat.hands[0].finished = false;
+        }
+    }
 
+    Card dealerUpcard = m_shoe.draw();
     m_dealer.hand.addCard(dealerUpcard);
+
+    for (auto& seat : m_seats) {
+        if (!seat.hands.empty()) {
+            seat.hands[0].hand.addCard(m_shoe.draw());
+        }
+    }
+
+    Card dealerHoleCard = m_shoe.draw();
     m_dealer.holeCard = dealerHoleCard;
     m_dealer.holeCardVisible = false;
-
-    m_seats[0].hands[0].hand.addCard(playerCard1);
-    m_seats[0].hands[0].hand.addCard(playerCard2);
-    m_seats[0].hands[0].finished = false;
 
     advancePhase();
 }
@@ -317,6 +341,8 @@ void RoundState::advancePhase() {
                 m_phase = RoundPhase::DealerTurn;
                 revealDealerHoleCard();
                 dealerPlay();
+            } else if (m_currentHandIndex < 0 || m_currentSeatIndex < 0) {
+                findNextActiveHand();
             }
             break;
 
@@ -463,8 +489,36 @@ void RoundState::nextHand() {
     m_currentHandIndex++;
     if (m_currentHandIndex >= static_cast<int>(m_seats[m_currentSeatIndex].hands.size())) {
         m_currentHandIndex = -1;
-        m_currentSeatIndex = -1;
     }
+}
+
+void RoundState::findNextActiveHand() {
+    int startSeat = m_currentSeatIndex;
+    if (startSeat < 0) startSeat = 0;
+
+    // If current hand is valid and unfinished, stay put
+    if (startSeat >= 0 && startSeat < static_cast<int>(m_seats.size()) &&
+        m_currentHandIndex >= 0 &&
+        m_currentHandIndex < static_cast<int>(m_seats[startSeat].hands.size()) &&
+        !m_seats[startSeat].hands[m_currentHandIndex].finished) {
+        return;
+    }
+
+    // Search for next unfinished hand
+    for (int seat = startSeat; seat < static_cast<int>(m_seats.size()); ++seat) {
+        int startHand = (seat == startSeat) ? (m_currentHandIndex + 1) : 0;
+        for (int hand = startHand; hand < static_cast<int>(m_seats[seat].hands.size()); ++hand) {
+            if (!m_seats[seat].hands[hand].finished) {
+                m_currentSeatIndex = seat;
+                m_currentHandIndex = hand;
+                return;
+            }
+        }
+    }
+
+    // Nothing found
+    m_currentSeatIndex = -1;
+    m_currentHandIndex = -1;
 }
 
 void RoundState::nextSeat() {

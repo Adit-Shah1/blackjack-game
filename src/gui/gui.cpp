@@ -1062,6 +1062,7 @@ void GameTableScreen::onEnter() {
     if (!m_round) {
         RuleSet rules;
         m_round = std::make_unique<RoundState>(rules);
+        setupAIOpponents();
     }
     m_round->startRound();
     m_currentBet = m_round->rules().minBet;
@@ -1077,9 +1078,30 @@ void GameTableScreen::onEnter() {
     m_lastDealerCardCount = 0;
     m_outcomeTexts.clear();
     m_displayedBankroll = m_round->seats()[0].bankroll;
+    m_aiTurnTimer = 0.0f;
+    m_aiInsuranceResolved = false;
     rebuildUI();
     updateMessage();
     m_app->audioManager().playAmbient("casino_ambient");
+}
+
+void GameTableScreen::setupAIOpponents() {
+    if (!m_round || !m_aiControllers.empty()) return;
+    // Default: 2 AI opponents (3 total players)
+    const int aiCount = 2;
+    for (int i = 0; i < aiCount; ++i) {
+        std::string name = "AI " + std::to_string(i + 1);
+        m_round->addSeat(name, m_round->rules().startingBankroll);
+        int strategyType = i % 4;
+        std::unique_ptr<IAIStrategy> strategy;
+        switch (strategyType) {
+            case 0: strategy = std::make_unique<BasicStrategy>(); break;
+            case 1: strategy = std::make_unique<ConservativeStrategy>(); break;
+            case 2: strategy = std::make_unique<AggressiveStrategy>(); break;
+            case 3: strategy = std::make_unique<CardCounterStrategy>(&m_round->shoe()); break;
+        }
+        m_aiControllers.push_back(std::make_unique<AIController>(std::move(strategy)));
+    }
 }
 
 void GameTableScreen::onExit() {
@@ -1166,11 +1188,18 @@ void GameTableScreen::updateMessage() {
             m_subMessage.clear();
             break;
         case RoundPhase::PlayerTurns: {
+            int currentSeat = m_round->currentSeatIndex();
             int handIdx = m_round->currentHandIndex();
-            if (handIdx >= 0 && handIdx < static_cast<int>(m_round->seats()[0].hands.size())) {
-                const auto& hand = m_round->seats()[0].hands[handIdx];
-                m_message = "Hand " + std::to_string(handIdx + 1) + " of " +
-                           std::to_string(m_round->seats()[0].hands.size());
+            if (currentSeat >= 0 && currentSeat < static_cast<int>(m_round->seats().size()) &&
+                handIdx >= 0 && handIdx < static_cast<int>(m_round->seats()[currentSeat].hands.size())) {
+                const auto& seat = m_round->seats()[currentSeat];
+                const auto& hand = seat.hands[handIdx];
+                if (currentSeat == 0) {
+                    m_message = "Your turn — Hand " + std::to_string(handIdx + 1) + " of " +
+                               std::to_string(seat.hands.size());
+                } else {
+                    m_message = seat.name + " is playing...";
+                }
                 m_subMessage = "Total: " + std::to_string(hand.hand.bestValue());
                 if (hand.hand.isSoft()) {
                     m_subMessage += " (soft)";
@@ -1224,32 +1253,64 @@ void GameTableScreen::onBetPlus() {
 void GameTableScreen::onDeal() {
     if (!m_round) return;
     m_round->placeBet(0, m_currentBet);
-    m_round->advancePhase();
 
-    // Animate initial deal: 4 cards from deck
-    float deckX = 640.0f - 35.0f;
-    float deckY = 360.0f - 49.0f;
-
-    const auto& playerHand = m_round->seats()[0].hands[0].hand;
-    if (playerHand.cardCount() >= 2) {
-        int px1, py1, px2, py2;
-        getPlayerCardPosition(0, 0, px1, py1);
-        getPlayerCardPosition(0, 1, px2, py2);
-        spawnCardFly(playerHand.cards()[0], deckX, deckY, static_cast<float>(px1), static_cast<float>(py1), true, 0.0f, 0, 0);
-        spawnCardFly(playerHand.cards()[1], deckX, deckY, static_cast<float>(px2), static_cast<float>(py2), true, 0.1f, 0, 1);
+    // AI bets
+    for (size_t i = 1; i < m_round->seats().size(); ++i) {
+        int bet = m_aiControllers[i - 1]->chooseBet(*m_round, static_cast<int>(i));
+        m_round->placeBet(static_cast<int>(i), bet);
     }
 
+    m_round->advancePhase();
+    animateInitialDealAllSeats();
+    m_app->audioManager().playSFX("shuffle");
+    m_needsUIRebuild = true;
+    m_aiInsuranceResolved = false;
+}
+
+void GameTableScreen::animateInitialDealAllSeats() {
+    if (!m_round) return;
+    float deckX = 640.0f - 35.0f;
+    float deckY = 360.0f - 49.0f;
+    float delay = 0.0f;
+    const float delayStep = 0.05f;
+
+    const auto& seats = m_round->seats();
     const auto& dealer = m_round->dealer();
+
+    // First card to each player
+    for (size_t s = 0; s < seats.size(); ++s) {
+        if (!seats[s].hands.empty() && seats[s].hands[0].hand.cardCount() >= 1) {
+            int tx, ty;
+            getPlayerCardPosition(0, 0, tx, ty, static_cast<int>(s));
+            spawnCardFly(seats[s].hands[0].hand.cards()[0], deckX, deckY,
+                         static_cast<float>(tx), static_cast<float>(ty), true, delay,
+                         static_cast<int>(s), 0, 0);
+            delay += delayStep;
+        }
+    }
+
+    // Dealer upcard
     if (dealer.hand.cardCount() >= 1) {
         int dx, dy;
         getDealerCardPosition(0, dx, dy);
-        spawnCardFly(dealer.hand.cards()[0], deckX, deckY, static_cast<float>(dx), static_cast<float>(dy), true, 0.05f, -1, 0);
-        // Hole card is dealt face down — no fly animation for it
+        spawnCardFly(dealer.hand.cards()[0], deckX, deckY,
+                     static_cast<float>(dx), static_cast<float>(dy), true, delay, -1, -1, 0);
+        delay += delayStep;
     }
 
-    m_lastDealerCardCount = m_round->dealer().hand.cardCount();
-    m_app->audioManager().playSFX("shuffle");
-    m_needsUIRebuild = true;
+    // Second card to each player
+    for (size_t s = 0; s < seats.size(); ++s) {
+        if (!seats[s].hands.empty() && seats[s].hands[0].hand.cardCount() >= 2) {
+            int tx, ty;
+            getPlayerCardPosition(0, 1, tx, ty, static_cast<int>(s));
+            spawnCardFly(seats[s].hands[0].hand.cards()[1], deckX, deckY,
+                         static_cast<float>(tx), static_cast<float>(ty), true, delay,
+                         static_cast<int>(s), 0, 1);
+            delay += delayStep;
+        }
+    }
+
+    m_lastDealerCardCount = dealer.hand.cardCount();
 }
 
 void GameTableScreen::onHit() {
@@ -1261,10 +1322,10 @@ void GameTableScreen::onHit() {
     int newCount = m_round->seats()[0].hands[handIdx].hand.cardCount();
     if (newCount > prevCount) {
         int tx, ty;
-        getPlayerCardPosition(handIdx, newCount - 1, tx, ty);
+        getPlayerCardPosition(handIdx, newCount - 1, tx, ty, 0);
         spawnCardFly(m_round->seats()[0].hands[handIdx].hand.cards().back(),
                      640.0f - 35.0f, 360.0f - 49.0f,
-                     static_cast<float>(tx), static_cast<float>(ty), true, 0.0f, handIdx, newCount - 1);
+                     static_cast<float>(tx), static_cast<float>(ty), true, 0.0f, 0, handIdx, newCount - 1);
         m_app->audioManager().playSFX("card_deal");
     }
     if (m_round->seats()[0].hands[handIdx].finished) {
@@ -1294,10 +1355,10 @@ void GameTableScreen::onDouble() {
     int newCount = m_round->seats()[0].hands[handIdx].hand.cardCount();
     if (newCount > prevCount) {
         int tx, ty;
-        getPlayerCardPosition(handIdx, newCount - 1, tx, ty);
+        getPlayerCardPosition(handIdx, newCount - 1, tx, ty, 0);
         spawnCardFly(m_round->seats()[0].hands[handIdx].hand.cards().back(),
                      640.0f - 35.0f, 360.0f - 49.0f,
-                     static_cast<float>(tx), static_cast<float>(ty), true, 0.0f, handIdx, newCount - 1);
+                     static_cast<float>(tx), static_cast<float>(ty), true, 0.0f, 0, handIdx, newCount - 1);
         m_app->audioManager().playSFX("card_deal");
     }
     m_app->audioManager().playSFX("chip_stack");
@@ -1318,11 +1379,11 @@ void GameTableScreen::onSplit() {
         int cardCount = hands[h].hand.cardCount();
         if (cardCount >= 2) {
             int tx, ty;
-            getPlayerCardPosition(static_cast<int>(h), cardCount - 1, tx, ty);
+            getPlayerCardPosition(static_cast<int>(h), cardCount - 1, tx, ty, 0);
             spawnCardFly(hands[h].hand.cards().back(),
                          640.0f - 35.0f, 360.0f - 49.0f,
                          static_cast<float>(tx), static_cast<float>(ty), true,
-                         static_cast<float>(h - handIdx) * 0.05f, static_cast<int>(h), cardCount - 1);
+                         static_cast<float>(h - handIdx) * 0.05f, 0, static_cast<int>(h), cardCount - 1);
         }
     }
     m_app->audioManager().playSFX("card_deal");
@@ -1384,7 +1445,8 @@ void GameTableScreen::onNextRound() {
 
 void GameTableScreen::spawnCardFly(const Card& card, float fromX, float fromY,
                                     float toX, float toY, bool faceUp, float delay,
-                                    int targetHandIndex, int targetCardIndex) {
+                                    int targetSeatIndex, int targetHandIndex,
+                                    int targetCardIndex) {
     FlyingCard fc;
     fc.card = card;
     fc.startX = fromX;
@@ -1398,6 +1460,7 @@ void GameTableScreen::spawnCardFly(const Card& card, float fromX, float fromY,
     fc.duration = 0.25f;
     fc.elapsed = 0.0f;
     fc.done = false;
+    fc.targetSeatIndex = targetSeatIndex;
     fc.targetHandIndex = targetHandIndex;
     fc.targetCardIndex = targetCardIndex;
     m_flyingCards.push_back(fc);
@@ -1416,14 +1479,25 @@ void GameTableScreen::spawnScreenFlash(const Color& color, float duration) {
     m_screenFlash.active = true;
 }
 
-void GameTableScreen::getPlayerCardPosition(int handIndex, int cardIndex, int& outX, int& outY) {
+void GameTableScreen::getPlayerCardPosition(int handIndex, int cardIndex, int& outX, int& outY, int seatIndex) {
     const int cw = 70;
     const int overlap = 20;
-    int cardCount = m_round->seats()[0].hands[handIndex].hand.cardCount();
+    int totalSeats = static_cast<int>(m_round->seats().size());
+    int centerX = getSeatCenterX(seatIndex, totalSeats);
+    int baseY = (seatIndex == 0) ? 380 : 520;
+
+    if (seatIndex < 0 || seatIndex >= totalSeats ||
+        handIndex < 0 || handIndex >= static_cast<int>(m_round->seats()[seatIndex].hands.size())) {
+        outX = centerX;
+        outY = baseY;
+        return;
+    }
+
+    int cardCount = m_round->seats()[seatIndex].hands[handIndex].hand.cardCount();
     int totalWidth = cardCount * cw - (cardCount - 1) * overlap;
-    int startX = (1280 - totalWidth) / 2;
+    int startX = centerX - totalWidth / 2;
     outX = startX + cardIndex * (cw - overlap);
-    outY = 380 + handIndex * 110;
+    outY = baseY + handIndex * 110;
 }
 
 void GameTableScreen::getDealerCardPosition(int cardIndex, int& outX, int& outY) {
@@ -1610,7 +1684,7 @@ void GameTableScreen::update(float deltaTime) {
                 }
                 if (!text.empty()) {
                     int tx = 0, ty = 0;
-                    getPlayerCardPosition(static_cast<int>(i), 0, tx, ty);
+                    getPlayerCardPosition(static_cast<int>(i), 0, tx, ty, 0);
                     ty -= 30;
                     spawnOutcomeText(text, static_cast<float>(tx) + 35.0f, static_cast<float>(ty), color);
                 }
@@ -1625,9 +1699,9 @@ void GameTableScreen::update(float deltaTime) {
             for (int i = m_lastDealerCardCount; i < dealerCardCount; ++i) {
                 int tx, ty;
                 getDealerCardPosition(i, tx, ty);
-                spawnCardFly(m_round->dealer().hand.cards()[i],
-                             640.0f - 35.0f, 360.0f - 49.0f,
-                             static_cast<float>(tx), static_cast<float>(ty), true, 0.0f, -1, i);
+            spawnCardFly(m_round->dealer().hand.cards()[i],
+                         640.0f - 35.0f, 360.0f - 49.0f,
+                         static_cast<float>(tx), static_cast<float>(ty), true, 0.0f, -1, -1, i);
                 m_app->audioManager().playSFX("card_deal");
             }
         }
@@ -1638,6 +1712,30 @@ void GameTableScreen::update(float deltaTime) {
 
     updateOutcomeTexts(deltaTime);
     updateBankrollTicker(deltaTime);
+
+    // AI insurance resolution during InsuranceOffer phase
+    if (currentPhase == RoundPhase::InsuranceOffer && !m_aiInsuranceResolved) {
+        m_aiInsuranceResolved = true;
+        resolveAllAIInsurance();
+        // After AI resolves, auto-advance if human hasn't decided yet
+        // (the UI will still show Yes/No buttons for the human)
+    }
+
+    // AI turn execution during PlayerTurns phase
+    if (currentPhase == RoundPhase::PlayerTurns) {
+        int currentSeat = m_round->currentSeatIndex();
+        if (currentSeat > 0 && currentSeat < static_cast<int>(m_round->seats().size())) {
+            // It's an AI's turn
+            m_aiTurnTimer += deltaTime;
+            if (m_aiTurnTimer >= m_aiTurnDelay) {
+                m_aiTurnTimer = 0.0f;
+                int handIdx = m_round->currentHandIndex();
+                if (handIdx >= 0) {
+                    executeAIAction(currentSeat, handIdx);
+                }
+            }
+        }
+    }
 
     switch (currentPhase) {
         case RoundPhase::PlayerTurns: {
@@ -1739,7 +1837,8 @@ void GameTableScreen::renderDealer(SDL_Renderer* r) {
         // Skip rendering cards that are currently animating as flying cards
         bool skip = false;
         for (const auto& fc : m_flyingCards) {
-            if (fc.targetHandIndex == -1 && fc.targetCardIndex == i && !fc.done) {
+            if (fc.targetSeatIndex == -1 && fc.targetHandIndex == -1 &&
+                fc.targetCardIndex == i && !fc.done) {
                 skip = true;
                 break;
             }
@@ -1762,62 +1861,6 @@ void GameTableScreen::renderDealer(SDL_Renderer* r) {
         } else {
             renderCard(r, dealer.hand.cards()[i], cx, 80, true);
         }
-    }
-}
-
-void GameTableScreen::renderPlayer(SDL_Renderer* r) {
-    if (!m_round) return;
-    const auto& seat = m_round->seats()[0];
-    const int cw = 70;
-    const int ch = 98;
-    const int overlap = 20;
-    int currentHandIdx = m_round->currentHandIndex();
-
-    for (size_t h = 0; h < seat.hands.size(); ++h) {
-        const auto& handState = seat.hands[h];
-        int cardCount = handState.hand.cardCount();
-        int totalWidth = cardCount * cw - (cardCount - 1) * overlap;
-        int startX = (1280 - totalWidth) / 2;
-        int y = 380 + static_cast<int>(h) * 110;
-
-        // Highlight active hand during PlayerTurns with pulsing glow
-        if (m_round->phase() == RoundPhase::PlayerTurns &&
-            static_cast<int>(h) == currentHandIdx && !handState.finished) {
-            uint32_t ticks = SDL_GetTicks();
-            float pulse = (std::sin(ticks * 0.005f) + 1.0f) * 0.5f; // 0 to 1
-            uint8_t alpha = static_cast<uint8_t>(120 + pulse * 80); // 120 to 200
-            SDL_SetRenderDrawColor(r, 255, 215, 0, 255);
-            SDL_Rect highlight{ startX - 6, y - 6, totalWidth + 12, ch + 12 };
-            SDL_RenderDrawRect(r, &highlight);
-            SDL_SetRenderDrawColor(r, 255, 215, 0, alpha);
-            SDL_RenderFillRect(r, &highlight);
-        }
-
-        for (int i = 0; i < cardCount; ++i) {
-            // Skip rendering cards that are currently animating as flying cards
-            bool skip = false;
-            for (const auto& fc : m_flyingCards) {
-                if (fc.targetHandIndex == static_cast<int>(h) &&
-                    fc.targetCardIndex == i && !fc.done) {
-                    skip = true;
-                    break;
-                }
-            }
-            if (skip) continue;
-
-            int cx = startX + i * (cw - overlap);
-            renderCard(r, handState.hand.cards()[i], cx, y, true);
-        }
-
-        std::string total = std::to_string(handState.hand.bestValue());
-        if (handState.hand.isSoft()) total += " (soft)";
-        if (handState.hand.isBlackjack()) total += " — BJ!";
-        if (handState.hand.isBust()) total += " — Bust!";
-        int tw = 0, th = 0;
-        if (m_app->font()) {
-            TTF_SizeText(m_app->font(), total.c_str(), &tw, &th);
-        }
-        drawText(r, m_app->font(), total, (1280 - tw) / 2, y + ch + 4, 255, 255, 255);
     }
 }
 
@@ -1865,7 +1908,7 @@ void GameTableScreen::render(SDL_Renderer* renderer) {
     drawRoundedRectOutline(renderer, 340, 350, 600, 220, 12, {60, 110, 50, 255});
 
     renderDealer(renderer);
-    renderPlayer(renderer);
+    renderAllPlayers(renderer);
     renderFlyingCards(renderer);
     renderStatus(renderer);
     renderBetChips(renderer);
@@ -2002,6 +2045,214 @@ void GameTableScreen::renderBetChips(SDL_Renderer* r) {
     std::string betText = "$" + std::to_string(
         (m_round->phase() == RoundPhase::WaitingForBets) ? m_currentBet : m_round->seats()[0].hands[0].bet.mainBet);
     drawTextCentered(r, m_app->font(), betText, cx, cy + 18, 255, 255, 255);
+}
+
+// ============================================================================
+// AI Helpers
+// ============================================================================
+
+void GameTableScreen::executeAIAction(int seatIndex, int handIndex) {
+    if (!m_round || seatIndex <= 0 || seatIndex >= static_cast<int>(m_round->seats().size())) {
+        return;
+    }
+    if (handIndex < 0 || handIndex >= static_cast<int>(m_round->seats()[seatIndex].hands.size())) {
+        return;
+    }
+
+    int aiIdx = seatIndex - 1;
+    if (aiIdx < 0 || aiIdx >= static_cast<int>(m_aiControllers.size())) {
+        return;
+    }
+
+    PlayerAction action = m_aiControllers[aiIdx]->chooseAction(*m_round, seatIndex, handIndex);
+    int prevCardCount = m_round->seats()[seatIndex].hands[handIndex].hand.cardCount();
+
+    bool actionSucceeded = false;
+    switch (action) {
+        case PlayerAction::Hit:
+            actionSucceeded = m_round->hit(seatIndex, handIndex);
+            break;
+        case PlayerAction::Stand:
+            actionSucceeded = m_round->stand(seatIndex, handIndex);
+            break;
+        case PlayerAction::DoubleDown:
+            actionSucceeded = m_round->doubleDown(seatIndex, handIndex);
+            break;
+        case PlayerAction::Split:
+            actionSucceeded = m_round->split(seatIndex, handIndex);
+            break;
+        case PlayerAction::Surrender:
+            actionSucceeded = m_round->surrender(seatIndex, handIndex);
+            break;
+        default:
+            actionSucceeded = m_round->stand(seatIndex, handIndex);
+            break;
+    }
+
+    if (!actionSucceeded) {
+        // Fallback: stand
+        m_round->stand(seatIndex, handIndex);
+    }
+
+    // Animate new card if drawn
+    int newCardCount = m_round->seats()[seatIndex].hands[handIndex].hand.cardCount();
+    if (newCardCount > prevCardCount) {
+        int tx, ty;
+        getPlayerCardPosition(handIndex, newCardCount - 1, tx, ty, seatIndex);
+        spawnCardFly(m_round->seats()[seatIndex].hands[handIndex].hand.cards().back(),
+                     640.0f - 35.0f, 360.0f - 49.0f,
+                     static_cast<float>(tx), static_cast<float>(ty), true, 0.0f,
+                     seatIndex, handIndex, newCardCount - 1);
+        m_app->audioManager().playSFX("card_deal");
+    }
+
+    // If split created a new hand, animate the new card for the second hand too
+    int handCount = static_cast<int>(m_round->seats()[seatIndex].hands.size());
+    if (action == PlayerAction::Split && handCount > handIndex + 1) {
+        int splitHandIdx = handIndex + 1;
+        int splitCardCount = m_round->seats()[seatIndex].hands[splitHandIdx].hand.cardCount();
+        if (splitCardCount > 0) {
+            int tx, ty;
+            getPlayerCardPosition(splitHandIdx, splitCardCount - 1, tx, ty, seatIndex);
+            spawnCardFly(m_round->seats()[seatIndex].hands[splitHandIdx].hand.cards().back(),
+                         640.0f - 35.0f, 360.0f - 49.0f,
+                         static_cast<float>(tx), static_cast<float>(ty), true, 0.05f,
+                         seatIndex, splitHandIdx, splitCardCount - 1);
+        }
+        m_app->audioManager().playSFX("card_deal");
+    }
+
+    if (action == PlayerAction::DoubleDown) {
+        m_app->audioManager().playSFX("chip_stack");
+    }
+
+    m_round->nextHand();
+    m_round->advancePhase();
+    m_needsUIRebuild = true;
+}
+
+void GameTableScreen::resolveAllAIInsurance() {
+    if (!m_round) return;
+    for (size_t i = 1; i < m_round->seats().size() && i - 1 < m_aiControllers.size(); ++i) {
+        const auto& seat = m_round->seats()[i];
+        if (seat.hands.empty() || seat.hands[0].bet.mainBet <= 0) continue;
+        bool takeIns = m_aiControllers[i - 1]->chooseInsurance(*m_round, static_cast<int>(i));
+        if (takeIns) {
+            int maxInsurance = seat.hands[0].bet.mainBet / 2;
+            m_round->takeInsurance(static_cast<int>(i), maxInsurance);
+        }
+    }
+}
+
+int GameTableScreen::getSeatCenterX(int seatIndex, int totalSeats) const {
+    if (totalSeats <= 1) return 640;
+    // Seat 0 (human) is always centered at the bottom.
+    if (seatIndex == 0) return 640;
+
+    const int margin = 160;  // enough for 5-card hands (~270px) centered
+    int aiCount = totalSeats - 1;
+    int aiIdx = seatIndex - 1;  // 0-based among AI seats
+
+    // Distribute AI seats evenly across the width above the human player.
+    // With 1 AI: centered at top. With 2+ AI: spread left/right.
+    if (aiCount == 1) {
+        return 640;
+    }
+
+    int aiSpacing = (1280 - margin * 2) / (aiCount + 1);
+    return margin + (aiIdx + 1) * aiSpacing;
+}
+
+void GameTableScreen::renderAllPlayers(SDL_Renderer* r) {
+    if (!m_round) return;
+    int totalSeats = static_cast<int>(m_round->seats().size());
+    if (totalSeats == 0) return;
+
+    for (int s = 0; s < totalSeats; ++s) {
+        int cx = getSeatCenterX(s, totalSeats);
+        int baseY = (s == 0) ? 380 : 520;  // Human at bottom, AI above
+        bool isHuman = (s == 0);
+        renderPlayerSeat(r, s, cx, baseY, isHuman);
+    }
+}
+
+void GameTableScreen::renderPlayerSeat(SDL_Renderer* r, int seatIndex, int centerX, int baseY, bool isHuman) {
+    if (!m_round) return;
+    const auto& seat = m_round->seats()[seatIndex];
+    const int cw = 70;
+    const int ch = 98;
+    const int overlap = 20;
+    int currentHandIdx = m_round->currentHandIndex();
+    int currentSeatIdx = m_round->currentSeatIndex();
+
+    // Draw seat name label
+    Color nameColor = isHuman ? Color{255, 215, 0, 255} : Color{200, 200, 200, 255};
+    drawTextCentered(r, m_app->font(), seat.name, centerX, baseY - 30,
+                     nameColor.r, nameColor.g, nameColor.b);
+
+    // Draw bankroll
+    std::string bankrollText = "$" + std::to_string(seat.bankroll);
+    drawTextCentered(r, m_app->font(), bankrollText, centerX, baseY - 12,
+                     180, 180, 180);
+
+    for (size_t h = 0; h < seat.hands.size(); ++h) {
+        const auto& handState = seat.hands[h];
+        int cardCount = handState.hand.cardCount();
+        if (cardCount == 0) continue;
+
+        int totalWidth = cardCount * cw - (cardCount - 1) * overlap;
+        int startX = centerX - totalWidth / 2;
+        int y = baseY + static_cast<int>(h) * 110;
+
+        // Highlight active hand during PlayerTurns with pulsing glow
+        if (m_round->phase() == RoundPhase::PlayerTurns &&
+            seatIndex == currentSeatIdx &&
+            static_cast<int>(h) == currentHandIdx && !handState.finished) {
+            uint32_t ticks = SDL_GetTicks();
+            float pulse = (std::sin(ticks * 0.005f) + 1.0f) * 0.5f;
+            uint8_t alpha = static_cast<uint8_t>(120 + pulse * 80);
+            SDL_SetRenderDrawColor(r, 255, 215, 0, 255);
+            SDL_Rect highlight{ startX - 6, y - 6, totalWidth + 12, ch + 12 };
+            SDL_RenderDrawRect(r, &highlight);
+            SDL_SetRenderDrawColor(r, 255, 215, 0, alpha);
+            SDL_RenderFillRect(r, &highlight);
+        }
+
+        for (int i = 0; i < cardCount; ++i) {
+            // Skip rendering cards that are currently animating as flying cards
+            bool skip = false;
+            for (const auto& fc : m_flyingCards) {
+                if (fc.targetSeatIndex == seatIndex &&
+                    fc.targetHandIndex == static_cast<int>(h) &&
+                    fc.targetCardIndex == i && !fc.done) {
+                    skip = true;
+                    break;
+                }
+            }
+            if (skip) continue;
+
+            int cx = startX + i * (cw - overlap);
+            renderCard(r, handState.hand.cards()[i], cx, y, true);
+        }
+
+        // Hand total / outcome text
+        std::string labelText = std::to_string(handState.hand.bestValue());
+        if (handState.hand.isSoft()) labelText += " (soft)";
+        if (handState.hand.isBlackjack()) labelText += " — BJ!";
+        if (handState.hand.isBust()) labelText += " — Bust!";
+
+        // Show outcome text for completed hands
+        if (handState.outcome != HandOutcome::Pending) {
+            labelText += " [" + toString(handState.outcome) + "]";
+        }
+
+        int tw = 0, th = 0;
+        if (m_app->font()) {
+            TTF_SizeText(m_app->font(), labelText.c_str(), &tw, &th);
+        }
+        drawText(r, m_app->font(), labelText, centerX - tw / 2, y + ch + 4,
+                 255, 255, 255);
+    }
 }
 
 void GameTableScreen::updateBankrollTicker(float deltaTime) {

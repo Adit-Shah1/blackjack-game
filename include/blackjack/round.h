@@ -97,9 +97,12 @@ public:
     void advancePhase();
     void nextHand();
     void nextSeat();
+    void findNextActiveHand();
+    void addSeat(const std::string& name, int bankroll);
 
     bool isPlayerTurn() const;
     bool allPlayerHandsFinished() const;
+    bool allSeatsHaveBets() const;
     int evaluateDealerHand();
     void resolveHands();
     void evaluatePayouts();
