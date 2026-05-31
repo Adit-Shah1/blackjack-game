@@ -7,7 +7,7 @@ target_include_directories(gui PUBLIC
     ${PROJECT_SOURCE_DIR}/include
 )
 
-target_link_libraries(gui PRIVATE game audio)
+target_link_libraries(gui PRIVATE game audio network nlohmann_json::nlohmann_json)
 
 if(SDL2_FOUND)
     target_include_directories(gui PRIVATE ${SDL2_INCLUDE_DIRS})

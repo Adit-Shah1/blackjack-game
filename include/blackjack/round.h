@@ -106,6 +106,7 @@ public:
     int evaluateDealerHand();
     void resolveHands();
     void evaluatePayouts();
+    int calculatePayout(int seatIndex, int handIndex);
 
 private:
     RuleSet m_rules;
@@ -120,7 +121,6 @@ private:
     void revealDealerHoleCard();
     bool shouldDealerHit() const;
     void dealerPlay();
-    int calculatePayout(int seatIndex, int handIndex);
 };
 
 std::string toString(RoundPhase phase);

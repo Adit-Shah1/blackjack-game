@@ -22,6 +22,10 @@ namespace blackjack {
 // Forward declarations
 class AudioManager;
 class Application;
+class HostServer;
+class GameClient;
+class NetworkGameSession;
+class NetworkClientSession;
 
 // ---------------------------------------------------------------------------
 // Local Multiplayer Configuration
@@ -33,11 +37,25 @@ struct LocalMultiplayerConfig {
 };
 
 // ---------------------------------------------------------------------------
+// Network Configuration
+// ---------------------------------------------------------------------------
+struct NetworkConfig {
+    enum class Mode { None, Host, Client };
+    Mode mode = Mode::None;
+    std::string roomCode;
+    std::string playerName;
+    int port = 0;
+    std::string hostAddress;
+};
+
+// ---------------------------------------------------------------------------
 // AppState
 // ---------------------------------------------------------------------------
 enum class AppState {
     MainMenu,
     Lobby,
+    NetworkCreate,
+    NetworkJoin,
     Settings,
     Tutorial,
     InRound,
@@ -362,6 +380,7 @@ public:
     AudioManager& audioManager() { return *m_audioManager; }
     const Theme& theme() const { return m_theme; }
     LocalMultiplayerConfig& localMPConfig() { return m_localMPConfig; }
+    NetworkConfig& networkConfig() { return m_networkConfig; }
 
     // Render text centered at (x, y). If font is missing, this is a no-op.
     void renderText(const std::string& text, int x, int y,
@@ -384,6 +403,7 @@ private:
 
     ScreenManager m_screenManager;
     LocalMultiplayerConfig m_localMPConfig;
+    NetworkConfig m_networkConfig;
 
     bool loadFont();
 
@@ -593,6 +613,79 @@ private:
     void renderPassScreen(SDL_Renderer* r);
     int getLocalMPCenterX(int seatIndex, int totalSeats) const;
     void updateAllBankrollTickers(float deltaTime);
+
+    // Network multiplayer
+    enum class NetworkMode { None, Host, Client };
+    void setupNetworkHost();
+    void setupNetworkClient();
+    void processNetworkMessages(float deltaTime);
+    void sendActionToHost(PlayerAction action);
+    void broadcastStateToClients();
+    void renderNetworkStatus(SDL_Renderer* r);
+
+    NetworkMode m_networkMode = NetworkMode::None;
+    std::unique_ptr<HostServer> m_hostServer;
+    std::unique_ptr<NetworkClientSession> m_networkClientSession;
+    int m_networkSeatIndex = -1;   // seat assigned to this client (-1 for host)
+    float m_networkSyncTimer = 0.0f;
+    std::string m_networkStatusMsg;
+};
+
+class NetworkCreateScreen : public Screen {
+public:
+    explicit NetworkCreateScreen(Application* app);
+    ~NetworkCreateScreen() override;
+
+    void onEnter() override;
+    void onExit() override;
+    void handleEvent(const SDL_Event& event) override;
+    void update(float deltaTime) override;
+    void render(SDL_Renderer* renderer) override;
+
+    HostServer* hostServer() const { return m_hostServer.get(); }
+    std::unique_ptr<HostServer> takeHostServer() { return std::move(m_hostServer); }
+
+private:
+    Application* m_app;
+    std::vector<std::unique_ptr<Button>> m_buttons;
+    std::unique_ptr<HostServer> m_hostServer;
+    std::string m_roomCode;
+    std::vector<std::string> m_connectedPlayers;
+    bool m_gameStarted = false;
+    float m_pollTimer = 0.0f;
+
+    void setupButtons();
+    void refreshPlayerList();
+};
+
+class NetworkJoinScreen : public Screen {
+public:
+    explicit NetworkJoinScreen(Application* app);
+    ~NetworkJoinScreen() override;
+
+    void onEnter() override;
+    void onExit() override;
+    void handleEvent(const SDL_Event& event) override;
+    void update(float deltaTime) override;
+    void render(SDL_Renderer* renderer) override;
+
+    GameClient* gameClient() const { return m_gameClient.get(); }
+    std::unique_ptr<GameClient> takeGameClient() { return std::move(m_gameClient); }
+
+private:
+    Application* m_app;
+    std::vector<std::unique_ptr<Button>> m_buttons;
+    std::unique_ptr<GameClient> m_gameClient;
+
+    enum class JoinState { EnterCode, Connecting, Waiting, Ready, Error };
+    JoinState m_state = JoinState::EnterCode;
+    std::string m_roomCodeInput;
+    std::string m_statusMessage;
+    float m_connectTimer = 0.0f;
+    bool m_gameStarted = false;
+
+    void setupButtons();
+    void tryConnect();
 };
 
 class RoundResultsScreen : public Screen {

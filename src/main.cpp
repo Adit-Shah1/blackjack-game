@@ -26,6 +26,12 @@ int main(int /*argc*/, char* /*argv*/[]) {
         blackjack::AppState::RoundResults,
         std::make_unique<blackjack::RoundResultsScreen>(&app));
     app.screenManager().registerScreen(
+        blackjack::AppState::NetworkCreate,
+        std::make_unique<blackjack::NetworkCreateScreen>(&app));
+    app.screenManager().registerScreen(
+        blackjack::AppState::NetworkJoin,
+        std::make_unique<blackjack::NetworkJoinScreen>(&app));
+    app.screenManager().registerScreen(
         blackjack::AppState::Achievements,
         std::make_unique<blackjack::AchievementsScreen>(&app));
 
