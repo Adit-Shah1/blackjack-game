@@ -1,6 +1,12 @@
 # GUI layer - SDL2
 add_library(gui STATIC
-    gui.cpp
+    gui_helpers.cpp
+    gui_widgets.cpp
+    gui_core.cpp
+    gui_menus.cpp
+    gui_game.cpp
+    gui_network.cpp
+    gui_screens.cpp
 )
 
 target_include_directories(gui PUBLIC
