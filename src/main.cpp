@@ -34,6 +34,9 @@ int main(int /*argc*/, char* /*argv*/[]) {
     app.screenManager().registerScreen(
         blackjack::AppState::Achievements,
         std::make_unique<blackjack::AchievementsScreen>(&app));
+    app.screenManager().registerScreen(
+        blackjack::AppState::Tutorial,
+        std::make_unique<blackjack::TutorialScreen>(&app));
 
     app.screenManager().transitionTo(blackjack::AppState::MainMenu);
     app.run();

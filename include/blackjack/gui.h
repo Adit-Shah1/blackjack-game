@@ -9,6 +9,7 @@
 
 #include <blackjack/round.h>
 #include <blackjack/ai.h>
+#include <blackjack/persistence.h>
 
 // SDL forward declarations
 struct SDL_Window;
@@ -600,6 +601,17 @@ private:
     void renderPlayerSeat(SDL_Renderer* r, int seatIndex, int centerX, int baseY, bool isHuman);
     int getSeatCenterX(int seatIndex, int totalSeats) const;
 
+    // Achievement & stats
+    void initAchievements();
+    void checkAchievements();
+    void showToast(const std::string& message);
+    void renderToasts(SDL_Renderer* r);
+    void updateToasts(float deltaTime);
+
+    // Help overlay
+    void renderHelpOverlay(SDL_Renderer* r);
+    bool handleHelpEvent(const SDL_Event& event);
+
     // AI helpers
     void executeAIAction(int seatIndex, int handIndex);
     void resolveAllAIInsurance();
@@ -627,8 +639,17 @@ private:
     std::unique_ptr<HostServer> m_hostServer;
     std::unique_ptr<NetworkClientSession> m_networkClientSession;
     int m_networkSeatIndex = -1;   // seat assigned to this client (-1 for host)
-    float m_networkSyncTimer = 0.0f;
     std::string m_networkStatusMsg;
+
+    // Stats & achievements
+    PlayerStats m_stats;
+    std::vector<Achievement> m_achievements;
+    int m_sessionBlackjacks = 0;
+    int m_sessionHandsWithoutBust = 0;
+    std::vector<std::unique_ptr<Toast>> m_toasts;
+
+    // Help overlay
+    bool m_showHelpOverlay = false;
 };
 
 class NetworkCreateScreen : public Screen {
@@ -705,6 +726,7 @@ class AchievementsScreen : public Screen {
 public:
     explicit AchievementsScreen(Application* app);
 
+    void onEnter() override;
     void handleEvent(const SDL_Event& event) override;
     void update(float deltaTime) override;
     void render(SDL_Renderer* renderer) override;
@@ -712,6 +734,46 @@ public:
 private:
     Application* m_app;
     std::vector<std::unique_ptr<Button>> m_buttons;
+    std::vector<Achievement> m_achievements;
+    float m_scrollY = 0.0f;
+    bool m_draggingScroll = false;
+    int m_lastMouseY = 0;
+
+    void loadAchievements();
+    void renderAchievementCard(SDL_Renderer* r, int x, int y, int w, int h,
+                                const Achievement& ach, int progress, int target);
+};
+
+class TutorialScreen : public Screen {
+public:
+    explicit TutorialScreen(Application* app);
+
+    void onEnter() override;
+    void handleEvent(const SDL_Event& event) override;
+    void update(float deltaTime) override;
+    void render(SDL_Renderer* renderer) override;
+
+    enum class Step {
+        Welcome,
+        Objective,
+        Betting,
+        Deal,
+        HitStand,
+        DoubleSplit,
+        Insurance,
+        WrapUp
+    };
+
+private:
+    Application* m_app;
+    std::vector<std::unique_ptr<Button>> m_buttons;
+    Step m_step = Step::Welcome;
+
+    void setupButtons();
+    void advanceStep();
+    void previousStep();
+    void renderStep(SDL_Renderer* r);
+    void renderMiniTable(SDL_Renderer* r);
 };
 
 }  // namespace blackjack
