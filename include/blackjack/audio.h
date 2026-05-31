@@ -18,6 +18,10 @@ public:
     void setSFXVolume(int vol);      // 0-100
     void setAmbientVolume(int vol);  // 0-100
 
+    int masterVolume() const { return m_masterVolume; }
+    int sfxVolume() const { return m_sfxVolume; }
+    int ambientVolume() const { return m_ambientVolume; }
+
 private:
     int m_masterVolume = 100;
     int m_sfxVolume = 100;

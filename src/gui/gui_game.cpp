@@ -20,10 +20,24 @@ GameTableScreen::GameTableScreen(Application* app)
 GameTableScreen::~GameTableScreen() = default;
 
 void GameTableScreen::onEnter() {
+    Screen::onEnter();
     if (!m_round) {
         RuleSet rules;
         m_round = std::make_unique<RoundState>(rules);
     }
+
+    // Setup quit confirmation modal
+    m_quitConfirmModal = std::make_unique<Modal>(390, 260, 500, 200,
+        "Quit to Main Menu?", "Your current round progress will be lost.",
+        m_app->font());
+    m_quitConfirmModal->buttonLabels = {"Yes", "No"};
+    m_quitConfirmModal->onResult = [this](int result) {
+        m_quitConfirmModal->visible = false;
+        if (result == 0) {
+            m_app->screenManager().transitionTo(AppState::MainMenu);
+        }
+    };
+    m_quitConfirmModal->visible = false;
 
     // Reset stats and achievements for a fresh session
     m_stats = PlayerStats();
@@ -1071,7 +1085,21 @@ void GameTableScreen::playOutcomeAudio() {
 void GameTableScreen::handleEvent(const SDL_Event& event) {
     if (handleHelpEvent(event)) return;
     if (m_showHelpOverlay) return;  // Block all input while help is open
-    if (handleEscToMenu(event, m_app)) return;
+
+    // Handle quit confirmation modal
+    if (m_quitConfirmModal && m_quitConfirmModal->visible) {
+        if (m_quitConfirmModal->handleEvent(event)) return;
+        if (event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_ESCAPE) {
+            m_quitConfirmModal->visible = false;
+            return;
+        }
+        return;
+    }
+
+    if (event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_ESCAPE) {
+        m_quitConfirmModal->visible = true;
+        return;
+    }
 
     if (m_passScreenActive) {
         if (routeButtons(event, m_buttons)) return;
@@ -1527,6 +1555,10 @@ void GameTableScreen::render(SDL_Renderer* renderer) {
     renderOutcomeTexts(renderer);
     renderHelpOverlay(renderer);
     renderToasts(renderer);
+
+    if (m_quitConfirmModal && m_quitConfirmModal->visible) {
+        m_quitConfirmModal->render(renderer);
+    }
 }
 
 void GameTableScreen::spawnOutcomeText(const std::string& text, float x, float y, const Color& color) {

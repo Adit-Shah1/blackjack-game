@@ -109,8 +109,45 @@ Button::Button(int x, int y, int w, int h, const std::string& label,
     bounds = {x, y, w, h};
 }
 
+Button::~Button() {
+    if (m_labelTexture) {
+        SDL_DestroyTexture(m_labelTexture);
+        m_labelTexture = nullptr;
+    }
+}
+
+void Button::invalidateLabelCache() {
+    if (m_labelTexture) {
+        SDL_DestroyTexture(m_labelTexture);
+        m_labelTexture = nullptr;
+    }
+    m_cachedLabel.clear();
+    m_cachedFont = nullptr;
+    m_cachedEnabled = false;
+    m_labelTextureW = 0;
+    m_labelTextureH = 0;
+}
+
 void Button::setFont(TTF_Font* font) {
-    m_font = font;
+    if (m_font != font) {
+        m_font = font;
+        invalidateLabelCache();
+    }
+}
+
+void Button::setLabel(const std::string& newLabel) {
+    if (label != newLabel) {
+        label = newLabel;
+        invalidateLabelCache();
+    }
+}
+
+void Button::setHovered(bool hovered) {
+    m_hovered = hovered;
+}
+
+bool Button::isHovered() const {
+    return m_hovered;
 }
 
 void Button::resetState() {
@@ -154,21 +191,29 @@ void Button::render(SDL_Renderer* renderer) {
     drawRoundedRectOutline(renderer, x, y, w, h, 6,
         (m_hovered && enabled) ? Color{255, 215, 0, 180} : Color{100, 100, 100, 120});
 
-    // Label
+    // Label (cached texture to avoid per-frame surface creation)
     if (m_font && !label.empty()) {
-        Color textColor = !enabled ? t.textSecondary : t.textPrimary;
-        SDL_Color sdlText = toSDL(textColor);
-        SDL_Surface* surface = TTF_RenderText_Blended(m_font, label.c_str(), sdlText);
-        if (surface) {
-            SDL_Texture* texture = SDL_CreateTextureFromSurface(renderer, surface);
-            if (texture) {
-                int tw = surface->w;
-                int th = surface->h;
-                SDL_Rect dst{ x + (w - tw) / 2, y + (h - th) / 2, tw, th };
-                SDL_RenderCopy(renderer, texture, nullptr, &dst);
-                SDL_DestroyTexture(texture);
+        bool needRebuild = !m_labelTexture || m_cachedLabel != label || m_cachedFont != m_font || m_cachedEnabled != enabled;
+        if (needRebuild) {
+            invalidateLabelCache();
+            Color textColor = !enabled ? t.textSecondary : t.textPrimary;
+            SDL_Color sdlText = toSDL(textColor);
+            SDL_Surface* surface = TTF_RenderText_Blended(m_font, label.c_str(), sdlText);
+            if (surface) {
+                m_labelTexture = SDL_CreateTextureFromSurface(renderer, surface);
+                if (m_labelTexture) {
+                    m_labelTextureW = surface->w;
+                    m_labelTextureH = surface->h;
+                }
+                SDL_FreeSurface(surface);
             }
-            SDL_FreeSurface(surface);
+            m_cachedLabel = label;
+            m_cachedFont = m_font;
+            m_cachedEnabled = enabled;
+        }
+        if (m_labelTexture) {
+            SDL_Rect dst{ x + (w - m_labelTextureW) / 2, y + (h - m_labelTextureH) / 2, m_labelTextureW, m_labelTextureH };
+            SDL_RenderCopy(renderer, m_labelTexture, nullptr, &dst);
         }
     }
 }

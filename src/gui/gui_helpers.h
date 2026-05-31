@@ -41,4 +41,10 @@ void drawBitmap(SDL_Renderer* r, int x, int y, int scale,
                 const Color& color);
 void drawSuitSymbol(SDL_Renderer* r, Suit suit, int cx, int cy, int scale, const Color& color);
 
+// Keyboard navigation for button vectors (Tab/Arrow/Space/Enter)
+// Returns true if the event was consumed.
+bool handleButtonNavigation(const SDL_Event& event,
+                            std::vector<std::unique_ptr<Button>>& buttons,
+                            int& focusedIndex);
+
 }  // namespace blackjack

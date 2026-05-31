@@ -150,6 +150,98 @@ void drawBitmap(SDL_Renderer* r, int x, int y, int scale,
     }
 }
 
+bool handleButtonNavigation(const SDL_Event& event,
+                            std::vector<std::unique_ptr<Button>>& buttons,
+                            int& focusedIndex) {
+    if (event.type != SDL_KEYDOWN) {
+        return false;
+    }
+
+    // Only process navigation/activation keys
+    switch (event.key.keysym.sym) {
+        case SDLK_TAB: case SDLK_DOWN: case SDLK_RIGHT:
+        case SDLK_UP: case SDLK_LEFT:
+        case SDLK_SPACE: case SDLK_RETURN: case SDLK_KP_ENTER:
+            break;
+        default:
+            return false;
+    }
+
+    int visibleCount = 0;
+    for (const auto& btn : buttons) {
+        if (btn->visible && btn->enabled) ++visibleCount;
+    }
+    if (visibleCount == 0) return false;
+
+    // Ensure focusedIndex is within valid visible range
+    int clampedFocus = -1;
+    int idx = 0;
+    for (const auto& btn : buttons) {
+        if (btn->visible && btn->enabled) {
+            if (clampedFocus < 0) clampedFocus = idx;
+            if (idx == focusedIndex) {
+                clampedFocus = focusedIndex;
+                break;
+            }
+        }
+        ++idx;
+    }
+    if (clampedFocus < 0) clampedFocus = 0;
+    focusedIndex = clampedFocus;
+
+    // Clear all hover states first
+    for (auto& btn : buttons) {
+        btn->setHovered(false);
+    }
+
+    switch (event.key.keysym.sym) {
+        case SDLK_TAB:
+        case SDLK_DOWN:
+        case SDLK_RIGHT: {
+            // Find next visible/enabled button after focusedIndex
+            int start = focusedIndex;
+            int count = static_cast<int>(buttons.size());
+            for (int i = 1; i <= count; ++i) {
+                int next = (start + i) % count;
+                if (buttons[next]->visible && buttons[next]->enabled) {
+                    focusedIndex = next;
+                    buttons[next]->setHovered(true);
+                    return true;
+                }
+            }
+            return true;
+        }
+        case SDLK_UP:
+        case SDLK_LEFT: {
+            int start = focusedIndex;
+            int count = static_cast<int>(buttons.size());
+            for (int i = 1; i <= count; ++i) {
+                int prev = (start - i + count) % count;
+                if (buttons[prev]->visible && buttons[prev]->enabled) {
+                    focusedIndex = prev;
+                    buttons[prev]->setHovered(true);
+                    return true;
+                }
+            }
+            return true;
+        }
+        case SDLK_SPACE:
+        case SDLK_RETURN:
+        case SDLK_KP_ENTER: {
+            if (focusedIndex >= 0 && focusedIndex < static_cast<int>(buttons.size()) &&
+                buttons[focusedIndex]->visible && buttons[focusedIndex]->enabled &&
+                buttons[focusedIndex]->onClick) {
+                buttons[focusedIndex]->onClick();
+                return true;
+            }
+            break;
+        }
+        default:
+            break;
+    }
+    return false;
+}
+
 void drawSuitSymbol(SDL_Renderer* r, Suit suit, int cx, int cy, int scale, const Color& color) {
     // 11x11 bitmaps, drawn centered at (cx, cy)
     static const char* HEART[] = {

@@ -18,6 +18,7 @@ RoundResultsScreen::RoundResultsScreen(Application* app)
 
 void RoundResultsScreen::handleEvent(const SDL_Event& event) {
     if (handleEscToMenu(event, m_app)) return;
+    if (handleButtonNavigation(event, m_buttons, m_focusedButtonIndex)) return;
     if (routeButtons(event, m_buttons)) return;
 }
 
@@ -39,6 +40,7 @@ AchievementsScreen::AchievementsScreen(Application* app)
     : Screen(AppState::Achievements), m_app(app) {}
 
 void AchievementsScreen::onEnter() {
+    Screen::onEnter();
     m_buttons.clear();
     m_scrollY = 0.0f;
     loadAchievements();
@@ -139,9 +141,22 @@ void AchievementsScreen::renderAchievementCard(SDL_Renderer* r, int x, int y, in
 
 void AchievementsScreen::handleEvent(const SDL_Event& event) {
     if (handleEscToMenu(event, m_app)) return;
+    if (handleButtonNavigation(event, m_buttons, m_focusedButtonIndex)) return;
     if (routeButtons(event, m_buttons)) return;
 
-    // Simple scroll handling
+    // Keyboard scroll
+    if (event.type == SDL_KEYDOWN) {
+        if (event.key.keysym.sym == SDLK_UP) {
+            m_scrollY += 40;
+            return;
+        }
+        if (event.key.keysym.sym == SDLK_DOWN) {
+            m_scrollY -= 40;
+            return;
+        }
+    }
+
+    // Mouse scroll handling
     if (event.type == SDL_MOUSEWHEEL) {
         m_scrollY += event.wheel.y * -30;
     }
@@ -250,6 +265,7 @@ void TutorialScreen::setupButtons() {
 }
 
 void TutorialScreen::onEnter() {
+    Screen::onEnter();
     m_step = Step::Welcome;
     for (auto& btn : m_buttons) {
         btn->resetState();

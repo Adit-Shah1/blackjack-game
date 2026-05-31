@@ -1,4 +1,5 @@
 #include <blackjack/gui.h>
+#include <blackjack/audio.h>
 
 #include "gui_helpers.h"
 
@@ -47,12 +48,14 @@ void MainMenuScreen::setupButtons() {
 }
 
 void MainMenuScreen::onEnter() {
+    Screen::onEnter();
     for (auto& btn : m_buttons) {
         btn->resetState();
     }
 }
 
 void MainMenuScreen::handleEvent(const SDL_Event& event) {
+    if (handleButtonNavigation(event, m_buttons, m_focusedButtonIndex)) return;
     if (routeButtons(event, m_buttons)) return;
     if (event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_ESCAPE) {
         m_app->quit();
@@ -202,6 +205,7 @@ void LobbyScreen::resetToModeSelect() {
 }
 
 void LobbyScreen::onEnter() {
+    Screen::onEnter();
     resetToModeSelect();
     for (auto& btn : m_buttons) {
         btn->resetState();
@@ -237,8 +241,10 @@ void LobbyScreen::handleEvent(const SDL_Event& event) {
                 return;
             }
         }
+        return;
     }
 
+    if (handleButtonNavigation(event, m_buttons, m_focusedButtonIndex)) return;
     if (routeButtons(event, m_buttons)) return;
 }
 
@@ -299,10 +305,51 @@ void LobbyScreen::render(SDL_Renderer* renderer) {
 // ============================================================================
 
 SettingsScreen::SettingsScreen(Application* app)
-    : Screen(AppState::Settings), m_app(app) {}
+    : Screen(AppState::Settings), m_app(app) {
+    // Back button
+    auto backBtn = std::make_unique<Button>(
+        40, 640, 140, 44, "Back",
+        [this]() { m_app->screenManager().transitionTo(AppState::MainMenu); },
+        m_app->font());
+    backBtn->theme = &m_app->theme();
+    m_buttons.push_back(std::move(backBtn));
+}
+
+void SettingsScreen::onEnter() {
+    Screen::onEnter();
+    m_sliders.clear();
+
+    auto& audio = m_app->audioManager();
+    int startY = 200;
+    int gap = 90;
+
+    auto makeSlider = [&](int val, std::function<void(int)> cb) {
+        auto slider = std::make_unique<Slider>(490, startY, 300, 40, 0, 100, val);
+        slider->onValueChanged = std::move(cb);
+        slider->visible = true;
+        slider->enabled = true;
+        m_sliders.push_back(std::move(slider));
+        startY += gap;
+    };
+
+    makeSlider(audio.masterVolume(),
+               [&audio](int v) { audio.setMasterVolume(v); });
+    makeSlider(audio.sfxVolume(),
+               [&audio](int v) { audio.setSFXVolume(v); });
+    makeSlider(audio.ambientVolume(),
+               [&audio](int v) { audio.setAmbientVolume(v); });
+
+    for (auto& btn : m_buttons) {
+        btn->resetState();
+    }
+}
 
 void SettingsScreen::handleEvent(const SDL_Event& event) {
     if (handleEscToMenu(event, m_app)) return;
+    for (auto& slider : m_sliders) {
+        if (slider->handleEvent(event)) return;
+    }
+    if (handleButtonNavigation(event, m_buttons, m_focusedButtonIndex)) return;
     if (routeButtons(event, m_buttons)) return;
 }
 
@@ -313,6 +360,19 @@ void SettingsScreen::render(SDL_Renderer* renderer) {
     SDL_RenderClear(renderer);
 
     drawScreenLabel(renderer, m_app->font(), "Settings");
+
+    const char* labels[] = {"Master Volume", "SFX Volume", "Ambient Volume"};
+    int startY = 200;
+    int gap = 90;
+    for (size_t i = 0; i < m_sliders.size() && i < 3; ++i) {
+        drawTextCentered(renderer, m_app->font(), labels[i], 640, startY - 25, 220, 220, 220);
+        if (m_sliders[i]->visible) m_sliders[i]->render(renderer);
+        std::string valStr = std::to_string(m_sliders[i]->value) + "%";
+        drawText(renderer, m_app->font(), valStr, 810, startY + 5, 200, 200, 200);
+        startY += gap;
+    }
+
+    renderButtons(renderer, m_buttons);
     drawEscHint(renderer, m_app->font());
 }
 

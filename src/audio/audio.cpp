@@ -39,8 +39,12 @@ void AudioManager::playSFX(const std::string& key) {
         std::string path = "assets/audio/" + key + ".wav";
         Mix_Chunk* chunk = Mix_LoadWAV(path.c_str());
         if (!chunk) {
-            // Silently skip missing audio files
-            return;
+            path = "assets/audio/" + key + ".ogg";
+            chunk = Mix_LoadWAV(path.c_str());
+            if (!chunk) {
+                std::cerr << "Warning: failed to load SFX '" << key << "' (tried .wav and .ogg)" << std::endl;
+                return;
+            }
         }
         m_sfx[key] = chunk;
         it = m_sfx.find(key);
@@ -59,7 +63,12 @@ void AudioManager::playAmbient(const std::string& key) {
         std::string path = "assets/audio/" + key + ".ogg";
         Mix_Music* music = Mix_LoadMUS(path.c_str());
         if (!music) {
-            return;
+            path = "assets/audio/" + key + ".wav";
+            music = Mix_LoadMUS(path.c_str());
+            if (!music) {
+                std::cerr << "Warning: failed to load ambient '" << key << "' (tried .ogg and .wav)" << std::endl;
+                return;
+            }
         }
         m_music[key] = music;
         it = m_music.find(key);

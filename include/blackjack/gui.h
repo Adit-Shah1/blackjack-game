@@ -179,12 +179,26 @@ public:
     std::function<void()> onClick;
 
     void setFont(TTF_Font* font);
+    void setLabel(const std::string& newLabel);
     void resetState();
+    void setHovered(bool hovered);
+    bool isHovered() const;
+
+    ~Button();
 
 private:
     TTF_Font* m_font = nullptr;
     bool m_hovered = false;
     bool m_pressed = false;
+
+    SDL_Texture* m_labelTexture = nullptr;
+    int m_labelTextureW = 0;
+    int m_labelTextureH = 0;
+    std::string m_cachedLabel;
+    TTF_Font* m_cachedFont = nullptr;
+    bool m_cachedEnabled = false;
+
+    void invalidateLabelCache();
 };
 
 // ---------------------------------------------------------------------------
@@ -325,7 +339,7 @@ private:
 class Screen {
 public:
     virtual ~Screen() = default;
-    virtual void onEnter() {}
+    virtual void onEnter() { m_focusedButtonIndex = 0; }
     virtual void onExit() {}
     virtual void handleEvent(const SDL_Event& event) = 0;
     virtual void update(float deltaTime) = 0;
@@ -336,6 +350,7 @@ public:
 protected:
     explicit Screen(AppState state) : m_state(state) {}
     AppState m_state;
+    int m_focusedButtonIndex = -1;  // Keyboard navigation focus index for buttons
 };
 
 // ---------------------------------------------------------------------------
@@ -460,7 +475,7 @@ private:
 class SettingsScreen : public Screen {
 public:
     explicit SettingsScreen(Application* app);
-
+    void onEnter() override;
     void handleEvent(const SDL_Event& event) override;
     void update(float deltaTime) override;
     void render(SDL_Renderer* renderer) override;
@@ -468,6 +483,7 @@ public:
 private:
     Application* m_app;
     std::vector<std::unique_ptr<Button>> m_buttons;
+    std::vector<std::unique_ptr<Slider>> m_sliders;
 };
 
 class GameTableScreen : public Screen {
@@ -650,6 +666,9 @@ private:
 
     // Help overlay
     bool m_showHelpOverlay = false;
+
+    // ESC confirmation modal
+    std::unique_ptr<Modal> m_quitConfirmModal;
 };
 
 class NetworkCreateScreen : public Screen {

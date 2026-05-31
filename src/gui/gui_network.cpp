@@ -47,6 +47,7 @@ void NetworkCreateScreen::setupButtons() {
 }
 
 void NetworkCreateScreen::onEnter() {
+    Screen::onEnter();
     m_gameStarted = false;
     m_roomCode.clear();
     m_connectedPlayers.clear();
@@ -71,6 +72,7 @@ void NetworkCreateScreen::onExit() {
 
 void NetworkCreateScreen::handleEvent(const SDL_Event& event) {
     if (handleEscToMenu(event, m_app)) return;
+    if (handleButtonNavigation(event, m_buttons, m_focusedButtonIndex)) return;
     if (routeButtons(event, m_buttons)) return;
 }
 
@@ -205,6 +207,7 @@ void NetworkJoinScreen::setupButtons() {
 }
 
 void NetworkJoinScreen::onEnter() {
+    Screen::onEnter();
     m_state = JoinState::EnterCode;
     m_roomCodeInput.clear();
     m_statusMessage = "Enter host IP and room code";
@@ -284,8 +287,10 @@ void NetworkJoinScreen::handleEvent(const SDL_Event& event) {
                 return;
             }
         }
+        return;
     }
 
+    if (handleButtonNavigation(event, m_buttons, m_focusedButtonIndex)) return;
     if (routeButtons(event, m_buttons)) return;
 }
 
